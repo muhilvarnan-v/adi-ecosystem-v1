@@ -8,10 +8,10 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 const PHASE_COLORS: Record<string, string> = {
-  develop: '#818cf8',
-  review: '#22d3ee',
-  test: '#fbbf24',
-  deploy: '#4ade80',
+  develop: '#3a6679',
+  review: '#007faa',
+  test: '#cb8509',
+  deploy: '#6b9e78',
 };
 
 function statusClass(status: string): string {

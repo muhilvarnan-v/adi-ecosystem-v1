@@ -4,6 +4,9 @@ import { listGitHubRepos, listIntegrations } from '../api/integrations';
 import { createSkill, createSkillFromGitHub, deleteSkill, listSkills } from '../api/skills';
 import { ExternalLinkIcon, PlusIcon, SkillIcon, TrashIcon } from '../components/Icons';
 import type { GitHubRepo, IntegrationStatus, Skill } from '../types';
+import { registryIdFromDisplayName } from '../utils/registryIdFromDisplayName';
+
+const SKILL_ID_FROM_NAME_OPTS = { skillRegistry: true, fallbackSlug: 'skill' } as const;
 
 function LoadingIndicator() {
   return (
@@ -28,12 +31,12 @@ export function SkillsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [skillId, setSkillId] = useState('');
+  const [skillIdTouched, setSkillIdTouched] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [skillMd, setSkillMd] = useState('');
 
   const [selectedRepo, setSelectedRepo] = useState('');
-  const [manualRepo, setManualRepo] = useState('');
   const [reposLoading, setReposLoading] = useState(false);
   const [reposLoadError, setReposLoadError] = useState<string | null>(null);
   const [branch, setBranch] = useState('main');
@@ -116,18 +119,18 @@ export function SkillsPage() {
 
   function resetForm() {
     setSkillId('');
+    setSkillIdTouched(false);
     setDisplayName('');
     setDescription('');
     setSkillMd('');
     setBasePath('');
-    setManualRepo('');
     setReposLoadError(null);
     setIncludePatterns(DEFAULT_INCLUDE_PATTERNS.join(', '));
     setCreateTab('manual');
   }
 
   function effectiveGitHubRepo(): string {
-    return (selectedRepo || manualRepo).trim();
+    return selectedRepo.trim();
   }
 
   function closeCreateModal() {
@@ -247,28 +250,40 @@ export function SkillsPage() {
         {createTab === 'manual' && (
           <form onSubmit={handleManualSubmit} className="form">
             <label>
-              Skill ID
-              <input
-                value={skillId}
-                onChange={(e) => setSkillId(e.target.value.toLowerCase())}
-                required
-                pattern="[a-z][a-z0-9-]*[a-z0-9]"
-                maxLength={63}
-                placeholder="my-skill-id"
-                title="Lowercase letters, numbers, and hyphens. Must start with a letter."
-                autoFocus
-              />
-              <span className="field-hint">Immutable ID used in Skill Registry (cannot start with gcp-)</span>
-            </label>
-            <label>
               Display name
               <input
                 value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDisplayName(v);
+                  if (!skillIdTouched) {
+                    setSkillId(registryIdFromDisplayName(v, SKILL_ID_FROM_NAME_OPTS));
+                  }
+                }}
                 required
                 maxLength={200}
                 placeholder="My Skill"
+                autoFocus
               />
+            </label>
+            <label>
+              Skill ID
+              <input
+                value={skillId}
+                onChange={(e) => {
+                  setSkillIdTouched(true);
+                  setSkillId(e.target.value.toLowerCase());
+                }}
+                required
+                pattern="[a-z][a-z0-9-]*[a-z0-9]"
+                maxLength={63}
+                placeholder="my-skill"
+                title="Lowercase letters, numbers, and hyphens. Must start with a letter."
+              />
+              <span className="field-hint">
+                Auto-filled from the display name; edit if you need a different immutable Skill Registry id (cannot
+                start with gcp-).
+              </span>
             </label>
             <label>
               Description
@@ -304,6 +319,52 @@ export function SkillsPage() {
 
         {createTab === 'github' && (
           <form onSubmit={handleGitHubSubmit} className="form">
+            <label>
+              Display name
+              <input
+                value={displayName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDisplayName(v);
+                  if (!skillIdTouched) {
+                    setSkillId(registryIdFromDisplayName(v, SKILL_ID_FROM_NAME_OPTS));
+                  }
+                }}
+                required
+                maxLength={200}
+                placeholder="My Skill"
+                autoFocus
+              />
+            </label>
+            <label>
+              Skill ID
+              <input
+                value={skillId}
+                onChange={(e) => {
+                  setSkillIdTouched(true);
+                  setSkillId(e.target.value.toLowerCase());
+                }}
+                required
+                pattern="[a-z][a-z0-9-]*[a-z0-9]"
+                maxLength={63}
+                placeholder="my-skill"
+              />
+              <span className="field-hint">
+                Auto-filled from the display name; you can edit before import. Reserved prefix gcp- is adjusted
+                automatically.
+              </span>
+            </label>
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder="What does this skill help agents do?"
+              />
+            </label>
+
             {reposLoadError && <div className="alert alert-error">{reposLoadError}</div>}
             <label>
               Repository
@@ -311,7 +372,6 @@ export function SkillsPage() {
                 value={selectedRepo}
                 onChange={(e) => handleRepoChange(e.target.value)}
                 disabled={reposLoading || githubRepos.length === 0}
-                autoFocus
               >
                 {reposLoading ? (
                   <option value="">Loading repositories…</option>
@@ -328,19 +388,9 @@ export function SkillsPage() {
               </select>
               <span className="field-hint">
                 {githubRepos.length === 0
-                  ? 'If the list is empty, type owner/repo below (you still need GitHub connected).'
+                  ? 'Connect GitHub in Integrations and grant access to repositories you want to import from.'
                   : 'Pick a repository from your GitHub account.'}
               </span>
-            </label>
-            <label>
-              Or type owner/repo
-              <input
-                value={manualRepo}
-                onChange={(e) => setManualRepo(e.target.value.trim())}
-                placeholder="my-org/my-skills-repo"
-                pattern="[\w.-]+/[\w.-]+"
-                maxLength={200}
-              />
             </label>
             <label>
               Branch
@@ -365,37 +415,6 @@ export function SkillsPage() {
                 placeholder="SKILL.md, scripts/**, references/**"
               />
               <span className="field-hint">Comma-separated glob patterns (must include SKILL.md)</span>
-            </label>
-            <label>
-              Skill ID
-              <input
-                value={skillId}
-                onChange={(e) => setSkillId(e.target.value.toLowerCase())}
-                required
-                pattern="[a-z][a-z0-9-]*[a-z0-9]"
-                maxLength={63}
-                placeholder="my-skill-id"
-              />
-            </label>
-            <label>
-              Display name
-              <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                required
-                maxLength={200}
-                placeholder="My Skill"
-              />
-            </label>
-            <label>
-              Description
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                maxLength={2000}
-                placeholder="What does this skill help agents do?"
-              />
             </label>
             <div className="modal-actions">
               <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
@@ -453,63 +472,110 @@ export function SkillsPage() {
             <p>No skills yet.</p>
           </div>
         ) : (
-          <ul className="goal-list skill-list">
-            {skills.map((skill) => (
-              <li key={skill.id} className="goal-item skill-item">
-                <div className="goal-item-header">
-                  <h3>{skill.display_name}</h3>
-                  <span className={`badge badge-${skill.source}`}>{sourceLabel(skill.source)}</span>
-                </div>
-                <p className="skill-id muted small">ID: {skill.skill_id}</p>
-                {skill.source === 'github' && (
-                  <p className="skill-repo muted small">
-                    Repository:{' '}
-                    {skill.github_repo ? (
+          <ul className="goal-list skill-list skill-list-compact">
+            {skills.map((skill) => {
+              const showSkillIdInSubline =
+                skill.display_name.trim().toLowerCase() !== skill.skill_id.trim().toLowerCase();
+              const sublineHasGithub = skill.source === 'github';
+              const showSubline = showSkillIdInSubline || sublineHasGithub;
+
+              return (
+              <li key={skill.id} className="goal-item skill-item skill-item-compact">
+                <div className="skill-item-body">
+                  <div className="skill-item-title-row">
+                    <h3 title={`${skill.display_name} · ${skill.skill_id}`}>{skill.display_name}</h3>
+                    <span className={`badge badge-${skill.source}`}>{sourceLabel(skill.source)}</span>
+                  </div>
+                  {showSubline ? (
+                  <p className="skill-item-subline">
+                    {showSkillIdInSubline ? (
                       <>
-                        <a
-                          href={`https://github.com/${skill.github_repo}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {skill.github_repo}
-                        </a>
-                        {skill.github_branch ? `@${skill.github_branch}` : ''}
-                        {skill.github_base_path ? ` · ${skill.github_base_path}` : ''}
+                        <code className="skill-id-code">{skill.skill_id}</code>
+                        {sublineHasGithub ? (
+                          <span className="skill-item-sep" aria-hidden>
+                            ·
+                          </span>
+                        ) : null}
                       </>
-                    ) : (
-                      'not recorded — re-import from GitHub to link a repo'
-                    )}
+                    ) : null}
+                    {sublineHasGithub ? (
+                        skill.github_repo ? (
+                          <a
+                            href={`https://github.com/${skill.github_repo}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="skill-repo-inline"
+                            title={`${skill.github_repo}${skill.github_branch ? `@${skill.github_branch}` : ''}${skill.github_base_path ? ` — ${skill.github_base_path}` : ''}`}
+                          >
+                            {skill.github_repo}
+                            {skill.github_branch ? `@${skill.github_branch}` : ''}
+                            {skill.github_base_path ? ` · ${skill.github_base_path}` : ''}
+                          </a>
+                        ) : (
+                          <span className="muted">Repo not linked</span>
+                        )
+                    ) : null}
                   </p>
-                )}
-                {skill.description && <p className="goal-desc">{skill.description}</p>}
-                <div className="goal-meta">
-                  <span>
-                    {skill.state && <span className="skill-state">{skill.state} · </span>}
-                    Created {new Date(skill.created_at).toLocaleString()}
-                  </span>
+                  ) : null}
+                  {skill.description?.trim() ? (
+                    <p className="skill-item-desc" title={skill.description}>
+                      {skill.description}
+                    </p>
+                  ) : null}
+                  <div className="skill-item-foot">
+                    <span className="skill-item-meta-bits">
+                      {skill.state ? (
+                        <>
+                          <span className="skill-state">{skill.state}</span>
+                          <span aria-hidden> · </span>
+                        </>
+                      ) : null}
+                      <time dateTime={skill.created_at}>
+                        {new Date(skill.created_at).toLocaleDateString(undefined, {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </time>
+                    </span>
+                    {skill.include_patterns && skill.include_patterns.length > 0 ? (
+                      <details className="skill-patterns-inline">
+                        <summary>
+                          {skill.include_patterns.length} pattern
+                          {skill.include_patterns.length === 1 ? '' : 's'}
+                        </summary>
+                        <ul className="skill-patterns-inline-list">
+                          {skill.include_patterns.map((p) => (
+                            <li key={p}>
+                              <code>{p}</code>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
                 </div>
-                {skill.include_patterns && skill.include_patterns.length > 0 && (
-                  <p className="muted small skill-patterns">Patterns: {skill.include_patterns.join(', ')}</p>
-                )}
-                <div className="goal-actions">
-                  {skill.github_repo && (
+                <div className="skill-item-actions-col">
+                  {skill.github_repo ? (
                     <a
                       href={`https://github.com/${skill.github_repo}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="btn btn-secondary btn-sm"
+                      className="btn btn-secondary btn-sm skill-item-icon-btn"
+                      aria-label={`Open ${skill.github_repo} on GitHub`}
+                      title="Open on GitHub"
                     >
                       <ExternalLinkIcon />
-                      View repo
                     </a>
-                  )}
+                  ) : null}
                   <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(skill.id)}>
                     <TrashIcon />
                     Delete
                   </button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

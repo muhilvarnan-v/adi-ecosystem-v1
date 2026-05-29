@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { createWorkspace, deleteWorkspace, getWorkspaceConfig, listWorkspaces } from '../api/workspaces';
 import { EnvironmentIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type { Environment, SandboxEnvType } from '../types';
+import { registryIdFromDisplayName } from '../utils/registryIdFromDisplayName';
 
 const DOCKER_SANDBOX_DOC = 'https://docs.openhands.dev/sdk/guides/agent-server/docker-sandbox';
 const API_SANDBOX_DOC = 'https://docs.openhands.dev/sdk/guides/agent-server/api-sandbox';
@@ -34,6 +35,7 @@ export function WorkspacesPage() {
   const [previewEnvId, setPreviewEnvId] = useState<string | null>(null);
 
   const [envId, setEnvId] = useState('');
+  const [envIdTouched, setEnvIdTouched] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [sandboxType, setSandboxType] = useState<SandboxEnvType>('docker');
@@ -71,6 +73,7 @@ export function WorkspacesPage() {
 
   function resetForm() {
     setEnvId('');
+    setEnvIdTouched(false);
     setDisplayName('');
     setDescription('');
     setSandboxType('docker');
@@ -162,28 +165,40 @@ export function WorkspacesPage() {
 
         <form onSubmit={handleSubmit} className="form">
           <label>
-            Sandbox ID
-            <input
-              value={envId}
-              onChange={(e) => setEnvId(e.target.value.toLowerCase())}
-              required
-              pattern="[a-z][a-z0-9-]*[a-z0-9]"
-              maxLength={63}
-              placeholder="my-docker-sandbox"
-              title="Lowercase letters, numbers, and hyphens. Must start with a letter."
-              autoFocus
-            />
-            <span className="field-hint">Stable id stored as env_id (referenced by workflows and optional agent links)</span>
-          </label>
-          <label>
             Display name
             <input
               value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDisplayName(v);
+                if (!envIdTouched) {
+                  setEnvId(registryIdFromDisplayName(v));
+                }
+              }}
               required
               maxLength={200}
               placeholder="Team Docker runtime"
+              autoFocus
             />
+          </label>
+          <label>
+            Sandbox ID
+            <input
+              value={envId}
+              onChange={(e) => {
+                setEnvIdTouched(true);
+                setEnvId(e.target.value.toLowerCase());
+              }}
+              required
+              pattern="[a-z][a-z0-9-]*[a-z0-9]"
+              maxLength={63}
+              placeholder="team-docker-runtime"
+              title="Lowercase letters, numbers, and hyphens. Must start with a letter."
+            />
+            <span className="field-hint">
+              Auto-filled from the display name; edit if you need a different stable env_id for workflows and agent
+              links.
+            </span>
           </label>
           <label>
             Description
