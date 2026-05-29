@@ -1,0 +1,13 @@
+{
+  "name": "aid",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c green,cyan \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8000",
+    "setup:backend": "bash backend/scripts/setup-venv.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

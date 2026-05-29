@@ -1,0 +1,1397 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { DragEvent, FormEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
+import {
+  createApplication,
+  deleteApplication,
+  listApplications,
+  updateApplication,
+} from '../api/applications';
+import {
+  createGoal,
+  createGoalFromJira,
+  createGoalFromTrello,
+  createGoalFromZendesk,
+  deleteGoal,
+  listGoals,
+  resumeGoal,
+  updateGoal,
+} from '../api/goals';
+import { GoalExecutionModal } from '../components/GoalExecutionModal';
+import {
+  effectiveGoalWorkflowRoles,
+} from '../components/GoalWorkflowAgentPicker';
+import {
+  listGitHubRepos,
+  listIntegrations,
+  listJiraIssues,
+  listJiraSpaces,
+  listTrelloCards,
+  listZendeskTickets,
+} from '../api/integrations';
+import { ExternalLinkIcon, GitHubIcon, LogsIcon, PlusIcon, TrashIcon } from '../components/Icons';
+import type {
+  Application,
+  WorkflowDefinition,
+  WorkflowRoles,
+  ExternalCard,
+  ExternalIssue,
+  GitHubRepo,
+  JiraSpace,
+  Goal,
+  GoalStatus,
+  IntegrationStatus,
+  WorkflowRole,
+} from '../types';
+import { listWorkflows } from '../api/workflows';
+
+const KANBAN_LANES: { id: GoalStatus; label: string }[] = [
+  { id: 'backlog', label: 'Backlog' },
+  { id: 'in_progress', label: 'In Progress' },
+  { id: 'done', label: 'Done' },
+];
+
+function LoadingIndicator() {
+  return (
+    <div className="loading-dots" aria-label="Loading">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+function repoUrlFor(repo: GitHubRepo): string {
+  return repo.url ?? `https://github.com/${repo.full_name}`;
+}
+
+function GitHubRepoField({
+  repos,
+  githubConnected,
+  value,
+  onChange,
+  reposLoadError,
+}: {
+  repos: GitHubRepo[];
+  githubConnected: boolean;
+  value: string;
+  onChange: (url: string) => void;
+  reposLoadError?: string | null;
+}) {
+  if (!githubConnected) {
+    return (
+      <div className="form-note">
+        <p className="muted small">
+          <Link to="/harness/integrations">Connect GitHub</Link> in Integrations to select a repository.
+        </p>
+      </div>
+    );
+  }
+
+  const linkedLabel = value
+    ? value.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+    : null;
+
+  return (
+    <div className="github-repo-field">
+      {reposLoadError && <div className="alert alert-error">{reposLoadError}</div>}
+      <label>
+        <span className="github-repo-field-label">
+          <GitHubIcon />
+          GitHub repository
+        </span>
+        <select
+          className="github-repo-field-select"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">No repository linked</option>
+          {value && linkedLabel && !repos.some((r) => repoUrlFor(r) === value) && (
+            <option value={value}>{linkedLabel} (linked)</option>
+          )}
+          {repos.map((repo) => (
+            <option key={repo.id} value={repoUrlFor(repo)}>
+              {repo.full_name}
+              {repo.private ? ' (private)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Or paste repository URL
+        <input
+          type="url"
+          value={value}
+          onChange={(e) => onChange(e.target.value.trim())}
+          placeholder="https://github.com/owner/repo"
+          maxLength={500}
+        />
+      </label>
+    </div>
+  );
+}
+
+function ApplicationRepoBar({
+  app,
+  githubConnected,
+  githubRepos,
+  saving,
+  onRepoChange,
+}: {
+  app: Application;
+  githubConnected: boolean;
+  githubRepos: GitHubRepo[];
+  saving: boolean;
+  onRepoChange: (url: string) => void;
+}) {
+  const repoLabel = app.github_repo_url
+    ? app.github_repo_url.replace(/^https?:\/\/github\.com\//, '')
+    : null;
+
+  if (!githubConnected) {
+    return (
+      <div className="application-repo-bar application-repo-bar-muted">
+        <GitHubIcon />
+        {repoLabel ? (
+          <a
+            href={app.github_repo_url!}
+            target="_blank"
+            rel="noreferrer"
+            className="application-repo-name"
+          >
+            {repoLabel}
+          </a>
+        ) : (
+          <span className="application-repo-placeholder">No repository linked</span>
+        )}
+        <span className="application-repo-hint">
+          <Link to="/harness/integrations">Connect GitHub</Link>
+        </span>
+      </div>
+    );
+  }
+
+  const linkedUrl = app.github_repo_url ?? '';
+  const linkedInList = linkedUrl && githubRepos.some((r) => repoUrlFor(r) === linkedUrl);
+
+  return (
+    <div className="application-repo-bar">
+      <GitHubIcon />
+      <select
+        className="application-repo-select-input"
+        aria-label={`GitHub repository for ${app.title}`}
+        value={linkedUrl}
+        disabled={saving}
+        onChange={(e) => onRepoChange(e.target.value)}
+      >
+        <option value="">No repository linked</option>
+        {linkedUrl && repoLabel && !linkedInList && (
+          <option value={linkedUrl}>{repoLabel} (linked)</option>
+        )}
+        {githubRepos.map((repo) => (
+          <option key={repo.id} value={repoUrlFor(repo)}>
+            {repo.full_name}
+            {repo.private ? ' (private)' : ''}
+          </option>
+        ))}
+      </select>
+      {app.github_repo_url && (
+        <a
+          href={app.github_repo_url}
+          target="_blank"
+          rel="noreferrer"
+          className="application-repo-open"
+          aria-label="Open repository on GitHub"
+          title="Open on GitHub"
+        >
+          <ExternalLinkIcon />
+        </a>
+      )}
+    </div>
+  );
+}
+
+function goalCanViewLogs(goal: Goal): boolean {
+  const inActiveLane = goal.status === 'in_progress' || goal.status === 'done';
+  return inActiveLane && goal.execution_status != null;
+}
+
+function GoalCard({
+  goal,
+  onDelete,
+  onViewLogs,
+  onResume,
+  onDragStart,
+  onDragEnd,
+}: {
+  goal: Goal;
+  onDelete: (id: string) => void;
+  onViewLogs?: (goal: Goal) => void;
+  onResume?: (goal: Goal) => void;
+  onDragStart: (e: DragEvent, goalId: string) => void;
+  onDragEnd: () => void;
+}) {
+  function sourceLabel(source: Goal['source']) {
+    if (source === 'jira') return 'Jira';
+    if (source === 'trello') return 'Trello';
+    if (source === 'zendesk') return 'Zendesk';
+    return 'Manual';
+  }
+
+  return (
+    <article
+      className="kanban-card"
+      draggable
+      onDragStart={(e) => onDragStart(e, goal.id)}
+      onDragEnd={onDragEnd}
+    >
+      <div className="kanban-card-header">
+        <h3>{goal.title}</h3>
+        <div className="kanban-card-header-end">
+          {onViewLogs && goalCanViewLogs(goal) && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm kanban-card-logs-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewLogs(goal);
+              }}
+              title="View agent logs"
+              aria-label="View agent logs"
+            >
+              <LogsIcon />
+            </button>
+          )}
+          <span className={`badge badge-${goal.source}`}>{sourceLabel(goal.source)}</span>
+        </div>
+      </div>
+      {goal.description && <p className="kanban-card-desc">{goal.description}</p>}
+      {goal.pr_url && (
+        <p className="kanban-card-pr">
+          <a href={goal.pr_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+            Pull request
+          </a>
+        </p>
+      )}
+      {goal.execution_error && (
+        <p className="kanban-card-error muted small">{goal.execution_error}</p>
+      )}
+      <div className="kanban-card-meta">
+        <span>{new Date(goal.created_at).toLocaleDateString()}</span>
+        {goal.external_url && (
+          <a href={goal.external_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+            <ExternalLinkIcon />
+            Source
+          </a>
+        )}
+      </div>
+      <div className="kanban-card-actions">
+        {onResume && goal.resumable && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onResume(goal);
+            }}
+          >
+            Resume
+          </button>
+        )}
+        <button type="button" className="btn btn-danger btn-sm" onClick={() => onDelete(goal.id)}>
+          <TrashIcon />
+          Delete
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function JiraImportPanel({
+  issues,
+  spaces,
+  loadError,
+  submitting,
+  importDisabled = false,
+  onImport,
+  emptyMessage = 'No Jira issues found in the last year.',
+  searchPlaceholder = 'Search by key, title, or space…',
+  resolveImportId,
+}: {
+  issues: ExternalIssue[];
+  spaces: JiraSpace[];
+  loadError: string | null;
+  submitting: boolean;
+  importDisabled?: boolean;
+  onImport: (issueKey: string) => void;
+  emptyMessage?: string;
+  searchPlaceholder?: string;
+  resolveImportId?: (issue: ExternalIssue) => string;
+}) {
+  const [spaceFilter, setSpaceFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const spaceOptions = useMemo(() => {
+    if (spaces.length > 0) {
+      return [...spaces].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    const byKey = new Map<string, JiraSpace>();
+    for (const issue of issues) {
+      if (issue.space_key && !byKey.has(issue.space_key)) {
+        byKey.set(issue.space_key, {
+          id: issue.space_key,
+          key: issue.space_key,
+          name: issue.space_name ?? issue.space_key,
+        });
+      }
+    }
+    return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [spaces, issues]);
+
+  const filteredIssues = useMemo(() => {
+    let list = issues;
+    if (spaceFilter) {
+      list = list.filter((issue) => issue.space_key === spaceFilter);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (issue) =>
+          issue.key?.toLowerCase().includes(q) ||
+          issue.title.toLowerCase().includes(q) ||
+          issue.description.toLowerCase().includes(q) ||
+          issue.space_name?.toLowerCase().includes(q) ||
+          issue.space_key?.toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [issues, spaceFilter, searchQuery]);
+
+  if (loadError) {
+    return <p className="alert alert-error">{loadError}</p>;
+  }
+
+  if (issues.length === 0) {
+    return <p className="muted">{emptyMessage}</p>;
+  }
+
+  function importIdFor(issue: ExternalIssue): string {
+    if (resolveImportId) return resolveImportId(issue);
+    return issue.key ?? issue.id;
+  }
+
+  return (
+    <>
+      <div className="import-toolbar">
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={searchPlaceholder}
+          aria-label="Search issues"
+        />
+        <select
+          value={spaceFilter}
+          onChange={(e) => setSpaceFilter(e.target.value)}
+          aria-label="Filter by space"
+        >
+          <option value="">All spaces</option>
+          {spaceOptions.map((space) => (
+            <option key={space.key} value={space.key}>
+              {space.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="import-meta muted">
+        {filteredIssues.length} of {issues.length} issue{issues.length === 1 ? '' : 's'}
+        {spaceFilter || searchQuery.trim() ? ' matching filters' : ''}
+      </p>
+      {filteredIssues.length === 0 ? (
+        <p className="muted">No issues match your filters.</p>
+      ) : (
+        <div className="import-list">
+          {filteredIssues.map((issue) => (
+            <div key={issue.id} className="import-item">
+              <div className="import-item-content">
+                <strong>{issue.key}</strong> — {issue.title}
+                {issue.space_name && (
+                  <span className="badge badge-manual"> {issue.space_name}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={submitting || importDisabled}
+                onClick={() => {
+                  const id = importIdFor(issue);
+                  if (id) onImport(id);
+                }}
+              >
+                <PlusIcon />
+                Import
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ApplicationKanban({
+  application,
+  goals,
+  scopedGoals,
+  allowCreate = true,
+  onGoalsChange,
+  onError,
+  onGoalExecuting,
+  integrations,
+  githubRepoLinked,
+  jiraIssues,
+  jiraSpaces,
+  jiraLoadError,
+  trelloCards,
+  zendeskTickets,
+  zendeskLoadError,
+  workflowTemplates,
+  onRefreshWorkflowTemplates,
+}: {
+  application: Application;
+  goals: Goal[];
+  scopedGoals?: Goal[];
+  allowCreate?: boolean;
+  onGoalsChange: (updater: (prev: Goal[]) => Goal[]) => void;
+  onError: (message: string) => void;
+  onGoalExecuting: (goal: Goal) => void;
+  integrations: IntegrationStatus[];
+  githubRepoLinked: boolean;
+  jiraIssues: ExternalIssue[];
+  jiraSpaces: JiraSpace[];
+  jiraLoadError?: string | null;
+  trelloCards: ExternalCard[];
+  zendeskTickets: ExternalIssue[];
+  zendeskLoadError?: string | null;
+  workflowTemplates: WorkflowDefinition[];
+  onRefreshWorkflowTemplates?: () => void | Promise<void>;
+}) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<GoalStatus | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [importTab, setImportTab] = useState<'manual' | 'jira' | 'trello' | 'zendesk'>('manual');
+
+  const jiraConnected = integrations.find((i) => i.provider === 'jira')?.connected;
+  const trelloConnected = integrations.find((i) => i.provider === 'trello')?.connected;
+  const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
+
+  const applicationId = application.id;
+  const appGoals =
+    scopedGoals ?? goals.filter((g) => g.application_id === applicationId);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
+
+  useEffect(() => {
+    if (!showCreateModal) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') closeCreateModal();
+    }
+    document.addEventListener('keydown', onKeyDown);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [showCreateModal]);
+
+  function closeCreateModal() {
+    setShowCreateModal(false);
+    setTitle('');
+    setDescription('');
+    setImportTab('manual');
+    setSelectedWorkflowId('');
+  }
+
+  useEffect(() => {
+    if (!showCreateModal) return;
+    setSelectedWorkflowId((prev) => {
+      const ids = new Set(workflowTemplates.map((w) => w.id));
+      if (prev && ids.has(prev)) return prev;
+      return workflowTemplates[0]?.id ?? '';
+    });
+  }, [showCreateModal, application.id, workflowTemplates]);
+
+  const goalPipelineSteps: WorkflowRole[] =
+    (workflowTemplates.find((w) => w.id === selectedWorkflowId)?.steps as WorkflowRole[] | undefined) ?? [];
+
+  function buildEffectiveWorkflowRolesForGoal(): WorkflowRoles {
+    const tmpl = selectedWorkflowId ? workflowTemplates.find((w) => w.id === selectedWorkflowId) : undefined;
+    return effectiveGoalWorkflowRoles(
+      { ...(tmpl?.workflow_roles ?? {}) },
+      application,
+      goalPipelineSteps,
+    );
+  }
+
+  async function handleManualSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    if (!githubRepoLinked) {
+      onError('Link a GitHub repository to this application before creating a goal.');
+      return;
+    }
+    if (!selectedWorkflowId.trim()) {
+      onError('Select a workflow. Create one under Workflows if you have not yet.');
+      return;
+    }
+    const effective = buildEffectiveWorkflowRolesForGoal();
+    if (!effective.develop) {
+      onError(
+        'The selected workflow (or your application) must supply a Development agent for this pipeline.',
+      );
+      return;
+    }
+    if (goalPipelineSteps.includes('deploy') && !effective.deploy) {
+      onError(
+        'The selected workflow (or your application) must supply a Deployment agent when deployment is in the pipeline.',
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const created = await createGoal(
+        applicationId,
+        title.trim(),
+        description.trim(),
+        effective,
+        { workflow_id: selectedWorkflowId },
+      );
+      onGoalsChange((prev) => [created, ...prev]);
+      closeCreateModal();
+      onGoalExecuting(created);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to create goal');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleImportFromJira(issueKey: string) {
+    if (!selectedWorkflowId.trim()) {
+      onError('Select a workflow before importing from Jira.');
+      return;
+    }
+    const effective = buildEffectiveWorkflowRolesForGoal();
+    if (!effective.develop) {
+      onError(
+        'The selected workflow (or your application) must supply a Development agent before importing from Jira.',
+      );
+      return;
+    }
+    if (goalPipelineSteps.includes('deploy') && !effective.deploy) {
+      onError(
+        'The selected workflow (or your application) must supply a Deployment agent before importing from Jira.',
+      );
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const created = await createGoalFromJira(
+        applicationId,
+        issueKey,
+        effective,
+        { workflow_id: selectedWorkflowId },
+      );
+      onGoalsChange((prev) => [created, ...prev]);
+      closeCreateModal();
+      onGoalExecuting(created);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to import from Jira');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleImportFromTrello(cardId: string) {
+    if (!selectedWorkflowId.trim()) {
+      onError('Select a workflow before importing from Trello.');
+      return;
+    }
+    const effective = buildEffectiveWorkflowRolesForGoal();
+    if (!effective.develop) {
+      onError(
+        'The selected workflow (or your application) must supply a Development agent before importing from Trello.',
+      );
+      return;
+    }
+    if (goalPipelineSteps.includes('deploy') && !effective.deploy) {
+      onError(
+        'The selected workflow (or your application) must supply a Deployment agent before importing from Trello.',
+      );
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const created = await createGoalFromTrello(
+        applicationId,
+        cardId,
+        effective,
+        { workflow_id: selectedWorkflowId },
+      );
+      onGoalsChange((prev) => [created, ...prev]);
+      closeCreateModal();
+      onGoalExecuting(created);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to import from Trello');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleImportFromZendesk(ticketId: string) {
+    if (!selectedWorkflowId.trim()) {
+      onError('Select a workflow before importing from Zendesk.');
+      return;
+    }
+    const effective = buildEffectiveWorkflowRolesForGoal();
+    if (!effective.develop) {
+      onError(
+        'The selected workflow (or your application) must supply a Development agent before importing from Zendesk.',
+      );
+      return;
+    }
+    if (goalPipelineSteps.includes('deploy') && !effective.deploy) {
+      onError(
+        'The selected workflow (or your application) must supply a Deployment agent before importing from Zendesk.',
+      );
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const created = await createGoalFromZendesk(
+        applicationId,
+        ticketId,
+        effective,
+        { workflow_id: selectedWorkflowId },
+      );
+      onGoalsChange((prev) => [created, ...prev]);
+      closeCreateModal();
+      onGoalExecuting(created);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to import from Zendesk');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this goal?')) return;
+    try {
+      await deleteGoal(id);
+      onGoalsChange((prev) => prev.filter((g) => g.id !== id));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to delete goal');
+    }
+  }
+
+  async function handleResume(goal: Goal) {
+    try {
+      const updated = await resumeGoal(goal.id);
+      onGoalsChange((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+      onGoalExecuting(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to resume goal');
+    }
+  }
+
+  function handleDragStart(e: DragEvent, goalId: string) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', goalId);
+    setDraggingId(goalId);
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null);
+    setDropTarget(null);
+  }
+
+  function handleDragOver(e: DragEvent, laneId: GoalStatus) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDropTarget(laneId);
+  }
+
+  function handleDragLeave(e: DragEvent, laneId: GoalStatus) {
+    const related = e.relatedTarget as Node | null;
+    if (related && e.currentTarget.contains(related)) return;
+    if (dropTarget === laneId) setDropTarget(null);
+  }
+
+  async function handleDrop(e: DragEvent, laneId: GoalStatus) {
+    e.preventDefault();
+    setDropTarget(null);
+    setDraggingId(null);
+
+    const goalId = e.dataTransfer.getData('text/plain');
+    if (!goalId) return;
+
+    const goal = appGoals.find((g) => g.id === goalId);
+    if (!goal || goal.status === laneId) return;
+
+    onGoalsChange((prev) =>
+      prev.map((g) => (g.id === goalId ? { ...g, status: laneId } : g)),
+    );
+
+    try {
+      await updateGoal(goalId, { status: laneId });
+    } catch (err) {
+      onGoalsChange((prev) =>
+        prev.map((g) => (g.id === goalId ? { ...g, status: goal.status } : g)),
+      );
+      onError(err instanceof Error ? err.message : 'Failed to move goal');
+    }
+  }
+
+  function goalsInLane(laneId: GoalStatus) {
+    return appGoals.filter((g) => (g.status ?? 'backlog') === laneId);
+  }
+
+  const createModal = showCreateModal && (
+    <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-goal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 id="create-goal-title">Add goal</h2>
+          <button type="button" className="modal-close" onClick={closeCreateModal} aria-label="Close">
+            ×
+          </button>
+        </div>
+
+        <div className="tabs">
+          <button
+            type="button"
+            className={importTab === 'manual' ? 'tab active' : 'tab'}
+            onClick={() => setImportTab('manual')}
+          >
+            Manual
+          </button>
+          <button
+            type="button"
+            className={importTab === 'jira' ? 'tab active' : 'tab'}
+            onClick={() => setImportTab('jira')}
+            disabled={!jiraConnected}
+            title={!jiraConnected ? 'Connect Jira in Integrations' : undefined}
+          >
+            From Jira
+          </button>
+          <button
+            type="button"
+            className={importTab === 'trello' ? 'tab active' : 'tab'}
+            onClick={() => setImportTab('trello')}
+            disabled={!trelloConnected}
+            title={!trelloConnected ? 'Connect Trello in Integrations' : undefined}
+          >
+            From Trello
+          </button>
+          <button
+            type="button"
+            className={importTab === 'zendesk' ? 'tab active' : 'tab'}
+            onClick={() => setImportTab('zendesk')}
+            disabled={!zendeskConnected}
+            title={!zendeskConnected ? 'Connect Zendesk in Integrations' : undefined}
+          >
+            From Zendesk
+          </button>
+        </div>
+
+        <fieldset className="fieldset goal-workflow-template-select">
+          <legend>Implementation workflow</legend>
+          <p className="muted small">
+            Goals use one of your saved workflows from <Link to="/workflows">Workflows</Link>. Roles defined on
+            the workflow are used first; any missing role can still inherit from the application.
+          </p>
+          {workflowTemplates.length > 0 ? (
+            <label>
+              Workflow
+              <select
+                required
+                value={selectedWorkflowId}
+                onChange={(e) => {
+                  setSelectedWorkflowId(e.target.value);
+                }}
+              >
+                {workflowTemplates.map((wf) => (
+                  <option key={wf.id} value={wf.id}>
+                    {wf.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="muted small">
+              Create at least one workflow under <Link to="/workflows">Workflows</Link> before you can add a
+              goal.
+            </p>
+          )}
+        </fieldset>
+
+        {importTab === 'manual' && (
+          <form onSubmit={handleManualSubmit} className="form">
+            <label>
+              Title
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                required
+                maxLength={500}
+                placeholder="What do you want to achieve?"
+                autoFocus
+              />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={4}
+                maxLength={10000}
+                placeholder="Add context, acceptance criteria, or notes…"
+              />
+            </label>
+            {!githubRepoLinked && (
+              <p className="muted small">
+                Link a GitHub repository on this application before creating a goal.
+              </p>
+            )}
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submitting || !githubRepoLinked || !selectedWorkflowId.trim()}
+              >
+                <PlusIcon />
+                {submitting ? 'Starting OpenHands…' : 'Create & run goal'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {importTab === 'jira' && (
+          <JiraImportPanel
+            issues={jiraIssues}
+            spaces={jiraSpaces}
+            loadError={jiraLoadError ?? null}
+            submitting={submitting}
+            importDisabled={!selectedWorkflowId.trim()}
+            onImport={handleImportFromJira}
+          />
+        )}
+
+        {importTab === 'trello' && (
+          <div className="import-list">
+            {trelloCards.length === 0 ? (
+              <p className="muted">No Trello cards found or still loading.</p>
+            ) : (
+              trelloCards.map((card) => (
+                <div key={card.id} className="import-item">
+                  <div className="import-item-content">
+                    <strong>{card.title}</strong>
+                    {card.board_name && <span className="badge badge-manual"> {card.board_name}</span>}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={submitting || !selectedWorkflowId.trim()}
+                    onClick={() => handleImportFromTrello(card.id)}
+                  >
+                    <PlusIcon />
+                    Import
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {importTab === 'zendesk' && (
+          <JiraImportPanel
+            issues={zendeskTickets}
+            spaces={[]}
+            loadError={zendeskLoadError ?? null}
+            submitting={submitting}
+            importDisabled={!selectedWorkflowId.trim()}
+            onImport={handleImportFromZendesk}
+            emptyMessage="No Zendesk tickets found."
+            searchPlaceholder="Search by ticket #, title, or status…"
+            resolveImportId={(issue) => issue.id}
+          />
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {createModal ? createPortal(createModal, document.body) : null}
+      <div className="kanban-board">
+        {KANBAN_LANES.map((lane) => {
+          const laneGoals = goalsInLane(lane.id);
+          const isDropTarget = dropTarget === lane.id;
+          const isBacklog = lane.id === 'backlog';
+          return (
+            <div
+              key={lane.id}
+              className={`kanban-lane kanban-lane-${lane.id}${isDropTarget ? ' kanban-lane-drop-target' : ''}`}
+              onDragOver={(e) => handleDragOver(e, lane.id)}
+              onDragLeave={(e) => handleDragLeave(e, lane.id)}
+              onDrop={(e) => handleDrop(e, lane.id)}
+            >
+              <div className="kanban-lane-header">
+                <h3>{lane.label}</h3>
+                <span className="kanban-lane-count">{laneGoals.length}</span>
+              </div>
+              <div className="kanban-lane-body">
+                {isBacklog && allowCreate && (
+                  <button
+                    type="button"
+                    className="kanban-lane-add"
+                    disabled={!workflowTemplates.length}
+                    title={
+                      workflowTemplates.length
+                        ? undefined
+                        : 'Create a workflow under Workflows before adding goals.'
+                    }
+                    onClick={() => {
+                      void onRefreshWorkflowTemplates?.();
+                      setShowCreateModal(true);
+                    }}
+                  >
+                    <PlusIcon />
+                    Add goal
+                  </button>
+                )}
+                {laneGoals.map((goal) => (
+                  <GoalCard
+                    key={goal.id}
+                    goal={goal}
+                    onDelete={handleDelete}
+                    onViewLogs={
+                      lane.id === 'in_progress' || lane.id === 'done'
+                        ? onGoalExecuting
+                        : undefined
+                    }
+                    onResume={goal.resumable ? handleResume : undefined}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                  />
+                ))}
+                {!isBacklog && laneGoals.length === 0 && (
+                  <p className="kanban-lane-empty">{draggingId ? 'Drop here' : 'No goals'}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+export function ApplicationsPage() {
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [executingGoal, setExecutingGoal] = useState<Goal | null>(null);
+  const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
+  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
+  const [reposLoadError, setReposLoadError] = useState<string | null>(null);
+  const [jiraIssues, setJiraIssues] = useState<ExternalIssue[]>([]);
+  const [jiraSpaces, setJiraSpaces] = useState<JiraSpace[]>([]);
+  const [jiraLoadError, setJiraLoadError] = useState<string | null>(null);
+  const [trelloCards, setTrelloCards] = useState<ExternalCard[]>([]);
+  const [zendeskTickets, setZendeskTickets] = useState<ExternalIssue[]>([]);
+  const [zendeskLoadError, setZendeskLoadError] = useState<string | null>(null);
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [savingRepoFor, setSavingRepoFor] = useState<string | null>(null);
+  const [showAppModal, setShowAppModal] = useState(false);
+  const [appTitle, setAppTitle] = useState('');
+  const [appDescription, setAppDescription] = useState('');
+  const [appRepoUrl, setAppRepoUrl] = useState('');
+
+  const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
+
+  const refreshWorkflowTemplates = useCallback(async () => {
+    try {
+      const res = await listWorkflows();
+      setWorkflowTemplates(res.workflows ?? []);
+    } catch {
+      /* keep existing list */
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [appsData, goalsData, integrationsData, wfRes] = await Promise.all([
+        listApplications(),
+        listGoals(),
+        listIntegrations(),
+        listWorkflows().catch(() => ({ workflows: [] as WorkflowDefinition[], updated_at: null })),
+      ]);
+      setApplications(appsData);
+      setGoals(goalsData);
+      setIntegrations(integrationsData);
+      setWorkflowTemplates(wfRes.workflows ?? []);
+
+      const githubOn = integrationsData.find((i) => i.provider === 'github')?.connected;
+      const jiraOn = integrationsData.find((i) => i.provider === 'jira')?.connected;
+      const trelloOn = integrationsData.find((i) => i.provider === 'trello')?.connected;
+      const zendeskOn = integrationsData.find((i) => i.provider === 'zendesk')?.connected;
+
+      if (githubOn) {
+        try {
+          setGithubRepos(await listGitHubRepos());
+          setReposLoadError(null);
+        } catch (e) {
+          setGithubRepos([]);
+          setReposLoadError(
+            e instanceof Error ? e.message : 'Failed to load GitHub repositories',
+          );
+        }
+      } else {
+        setGithubRepos([]);
+        setReposLoadError(null);
+      }
+
+      if (jiraOn) {
+        try {
+          const [issues, spaces] = await Promise.all([listJiraIssues(), listJiraSpaces()]);
+          setJiraIssues(issues);
+          setJiraSpaces(spaces);
+          setJiraLoadError(null);
+        } catch (e) {
+          setJiraIssues([]);
+          setJiraSpaces([]);
+          setJiraLoadError(e instanceof Error ? e.message : 'Failed to load Jira issues');
+        }
+      } else {
+        setJiraIssues([]);
+        setJiraSpaces([]);
+        setJiraLoadError(null);
+      }
+      if (trelloOn) {
+        try {
+          setTrelloCards(await listTrelloCards());
+        } catch {
+          setTrelloCards([]);
+        }
+      } else {
+        setTrelloCards([]);
+      }
+      if (zendeskOn) {
+        try {
+          setZendeskTickets(await listZendeskTickets());
+          setZendeskLoadError(null);
+        } catch (e) {
+          setZendeskTickets([]);
+          setZendeskLoadError(e instanceof Error ? e.message : 'Failed to load Zendesk tickets');
+        }
+      } else {
+        setZendeskTickets([]);
+        setZendeskLoadError(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load applications');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!showAppModal) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') closeAppModal();
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showAppModal]);
+
+  function closeAppModal() {
+    setShowAppModal(false);
+    setAppTitle('');
+    setAppDescription('');
+    setAppRepoUrl('');
+  }
+
+  async function handleRepoChange(applicationId: string, url: string) {
+    setSavingRepoFor(applicationId);
+    setError(null);
+    try {
+      const updated = await updateApplication(applicationId, {
+        github_repo_url: url || null,
+      });
+      setApplications((prev) => prev.map((a) => (a.id === applicationId ? updated : a)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update repository');
+    } finally {
+      setSavingRepoFor(null);
+    }
+  }
+
+  async function handleCreateApplication(e: FormEvent) {
+    e.preventDefault();
+    if (!appTitle.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const created = await createApplication(
+        appTitle.trim(),
+        appDescription.trim(),
+        appRepoUrl || null,
+      );
+      setApplications((prev) => [created, ...prev]);
+      closeAppModal();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create application');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDeleteApplication(id: string, title: string) {
+    if (!confirm(`Delete "${title}" and all its goals?`)) return;
+    try {
+      await deleteApplication(id);
+      setApplications((prev) => prev.filter((a) => a.id !== id));
+      setGoals((prev) => prev.filter((g) => g.application_id !== id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete application');
+    }
+  }
+
+  function goalCountForApp(applicationId: string) {
+    return goals.filter((g) => g.application_id === applicationId).length;
+  }
+
+  const unassignedGoals = goals.filter((g) => !g.application_id);
+
+  const appModal = showAppModal && (
+    <div className="modal-overlay" role="presentation" onClick={closeAppModal}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-app-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 id="create-app-title">Create application</h2>
+          <button type="button" className="modal-close" onClick={closeAppModal} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <form onSubmit={handleCreateApplication} className="form">
+          <label>
+            Title
+            <input
+              value={appTitle}
+              onChange={(e) => setAppTitle(e.target.value)}
+              required
+              maxLength={500}
+              placeholder="e.g. Customer portal"
+              autoFocus
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={appDescription}
+              onChange={(e) => setAppDescription(e.target.value)}
+              rows={4}
+              maxLength={10000}
+              placeholder="What is this application about?"
+            />
+          </label>
+          <GitHubRepoField
+            repos={githubRepos}
+            githubConnected={!!githubConnected}
+            value={appRepoUrl}
+            onChange={setAppRepoUrl}
+            reposLoadError={reposLoadError}
+          />
+          <div className="modal-actions">
+            <button type="button" className="btn btn-secondary" onClick={closeAppModal}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              <PlusIcon />
+              {submitting ? 'Creating…' : 'Create application'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="page page-applications">
+      <div className="page-header page-header-row">
+        <div>
+          <h1>Applications</h1>
+          <p className="muted">
+            Organize work by application. Link one GitHub repository per application and manage goals on
+            each board.
+          </p>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={() => setShowAppModal(true)}>
+          <PlusIcon />
+          Add application
+        </button>
+      </div>
+
+      {error && <div className="alert alert-error">{error}</div>}
+      {reposLoadError && !error && <div className="alert alert-error">{reposLoadError}</div>}
+      {executingGoal && (
+        <GoalExecutionModal
+          goal={executingGoal}
+          onClose={() => setExecutingGoal(null)}
+          onGoalUpdate={(updated) => {
+            setGoals((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+            setExecutingGoal(updated);
+          }}
+        />
+      )}
+      {appModal}
+
+      {loading ? (
+        <div className="empty-state">
+          <LoadingIndicator />
+        </div>
+      ) : applications.length === 0 ? (
+        <section className="card">
+          <div className="empty-state">
+            <p className="muted">No applications yet. Use Add application above to get started.</p>
+          </div>
+        </section>
+      ) : (
+        <div className="applications-list">
+          {applications.map((app) => (
+            <section key={app.id} className="card application-section">
+              <div className="application-section-header">
+                <div className="application-section-info">
+                  <h2>{app.title}</h2>
+                  {app.description && <p className="application-section-desc">{app.description}</p>}
+                  <ApplicationRepoBar
+                    app={app}
+                    githubConnected={!!githubConnected}
+                    githubRepos={githubRepos}
+                    saving={savingRepoFor === app.id}
+                    onRepoChange={(url) => handleRepoChange(app.id, url)}
+                  />
+                </div>
+                <div className="application-section-actions">
+                  <span className="card-count">{goalCountForApp(app.id)} goals</span>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => handleDeleteApplication(app.id, app.title)}
+                  >
+                    <TrashIcon />
+                    Delete
+                  </button>
+                </div>
+              </div>
+              <ApplicationKanban
+                application={app}
+                goals={goals}
+                onGoalsChange={setGoals}
+                onError={setError}
+                onGoalExecuting={setExecutingGoal}
+                integrations={integrations}
+                githubRepoLinked={!!app.github_repo_url}
+                jiraIssues={jiraIssues}
+                jiraSpaces={jiraSpaces}
+                jiraLoadError={jiraLoadError}
+                trelloCards={trelloCards}
+                zendeskTickets={zendeskTickets}
+                zendeskLoadError={zendeskLoadError}
+                workflowTemplates={workflowTemplates}
+                onRefreshWorkflowTemplates={refreshWorkflowTemplates}
+              />
+            </section>
+          ))}
+        </div>
+      )}
+
+      {!loading && unassignedGoals.length > 0 && (
+        <section className="card application-section application-section-unassigned">
+          <div className="application-section-header">
+            <div className="application-section-info">
+              <h2>Unassigned goals</h2>
+              <p className="application-section-desc muted">
+                Goals created before applications were added. Add them to an application by recreating if needed.
+              </p>
+            </div>
+            <span className="card-count">{unassignedGoals.length} goals</span>
+          </div>
+          <ApplicationKanban
+            application={{
+              id: '',
+              user_id: '',
+              title: 'Unassigned',
+              description: '',
+              github_repo_url: null,
+              workflow_roles: {},
+              workflow_max_cycles: 3,
+              created_at: '',
+              updated_at: '',
+            }}
+            goals={goals}
+            scopedGoals={unassignedGoals}
+            allowCreate={false}
+            onGoalsChange={(updater) => {
+              setGoals((prev) => {
+                const unassigned = prev.filter((g) => !g.application_id);
+                const updated = updater(unassigned);
+                const assigned = prev.filter((g) => g.application_id);
+                return [...assigned, ...updated];
+              });
+            }}
+            onError={setError}
+            onGoalExecuting={setExecutingGoal}
+            integrations={integrations}
+            githubRepoLinked={false}
+            jiraIssues={jiraIssues}
+            jiraSpaces={jiraSpaces}
+            jiraLoadError={jiraLoadError}
+            trelloCards={trelloCards}
+            zendeskTickets={zendeskTickets}
+            zendeskLoadError={zendeskLoadError}
+            workflowTemplates={workflowTemplates}
+            onRefreshWorkflowTemplates={refreshWorkflowTemplates}
+          />
+        </section>
+      )}
+    </div>
+  );
+}

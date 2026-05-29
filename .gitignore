@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node
+node_modules/
+dist/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Credentials
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
