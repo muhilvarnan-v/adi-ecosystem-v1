@@ -52,6 +52,7 @@ def run_goal_on_repo(
     on_log: LogCallback | None = None,
     on_workflow: WorkflowCallback | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
+    openhands_settings: dict[str, Any] | None = None,
 ) -> tuple[OpenHandsRunResult, dict | None]:
     python = _resolve_python()
     if not _RUN_GOAL_SCRIPT.is_file():
@@ -79,6 +80,8 @@ def run_goal_on_repo(
     }
     if openhands_sandbox:
         payload["openhands_sandbox"] = openhands_sandbox
+    if openhands_settings:
+        payload["openhands_settings"] = openhands_settings
 
     env = os.environ.copy()
     env.setdefault("LITELLM_LOG", "ERROR")

@@ -8,7 +8,7 @@ export interface WorkflowDefinition {
   steps: WorkflowRole[];
   workflow_roles: WorkflowRoles;
   workflow_max_cycles: number;
-  /** Optional Harness sandbox env record id (OpenHands Docker or API runtime). */
+  /** Optional Harness sandbox env record id (Docker or hosted API runtime). */
   sandbox_environment_id?: string | null;
 }
 
@@ -225,7 +225,7 @@ export interface Environment {
   updated_at: string;
 }
 
-/** Harness sandbox environment (OpenHands Docker or API runtime); API `/api/workspaces`. */
+/** Harness sandbox environment (Docker or hosted API runtime); API `/api/workspaces`. */
 export type Workspace = Environment;
 
 export interface EnvironmentCreatePayload {
@@ -305,12 +305,14 @@ export interface Agent {
   max_refinement_iterations: number;
   confirmation_mode: boolean;
   security_analyzer: SecurityAnalyzerType;
+  skill_attachments: SkillAttachment[];
   created_at: string;
   updated_at: string;
 }
 
 export interface AgentCreatePayload {
-  agent_id: string;
+  /** If omitted, the server generates a unique agent ID. */
+  agent_id?: string;
   display_name: string;
   description: string;
   system_prompt: string;
@@ -318,7 +320,8 @@ export interface AgentCreatePayload {
   mcp_server_ids: string[];
   llm_profile_id: string;
   tools: OpenHandsToolName[];
-  load_project_skills: boolean;
+  /** Defaults to true when omitted. */
+  load_project_skills?: boolean;
   condenser_enabled: boolean;
   condenser_max_size: number;
   critic_enabled: boolean;
@@ -328,6 +331,7 @@ export interface AgentCreatePayload {
   max_refinement_iterations: number;
   confirmation_mode: boolean;
   security_analyzer: SecurityAnalyzerType;
+  skill_attachments: SkillAttachment[];
 }
 
 export interface OpenHandsSchemaSection {

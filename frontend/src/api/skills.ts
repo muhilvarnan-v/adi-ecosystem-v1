@@ -13,6 +13,18 @@ export function createSkillFromGitHub(payload: SkillFromGitHubPayload) {
   return api.post<Skill>('/api/skills/from/github', payload);
 }
 
+export function updateSkill(
+  id: string,
+  payload: {
+    display_name?: string;
+    description?: string;
+    skill_md?: string;
+    additional_files?: { path: string; content: string }[];
+  },
+) {
+  return api.patch<Skill>(`/api/skills/${id}`, payload);
+}
+
 export function deleteSkill(id: string) {
   return api.delete(`/api/skills/${id}`);
 }

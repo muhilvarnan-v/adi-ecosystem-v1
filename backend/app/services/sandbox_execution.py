@@ -27,7 +27,7 @@ def sandbox_execution_dict_from_environment_row(row: dict[str, Any]) -> dict[str
             "server_image": img,
         }
 
-    port = int(row.get("docker_host_port") or 3000)
+    port = int(row.get("docker_host_port") or 8010)
     image = (row.get("docker_server_image") or "").strip() or "ghcr.io/openhands/agent-server:latest-python"
     return {
         "kind": "docker",

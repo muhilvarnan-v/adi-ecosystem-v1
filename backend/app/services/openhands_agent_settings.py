@@ -63,6 +63,7 @@ def normalize_agent_row(row: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("security_analyzer", "llm")
     out.setdefault("mcp_server_ids", out.get("mcp_server_ids") or [])
     out.setdefault("environment_id", out.get("environment_id"))
+    out.setdefault("skill_attachments", out.get("skill_attachments") or [])
     return out
 
 
@@ -225,8 +226,8 @@ def export_openhands_schema() -> dict[str, Any]:
             },
             {
                 "key": "context",
-                "label": "Agent context & skills",
-                "description": "Repo skills from the linked environment (AgentContext.load_project_skills).",
+                "label": "Skills",
+                "description": "Skills attached to this agent or sandbox; they are copied into the repo for each run so the agent can use them.",
             },
             {
                 "key": "tools",

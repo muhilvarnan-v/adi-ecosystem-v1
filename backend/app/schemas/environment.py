@@ -62,7 +62,7 @@ class EnvironmentCreate(BaseModel):
         min_length=1,
         max_length=2000,
     )
-    docker_host_port: int = Field(default=3000, ge=1, le=65535)
+    docker_host_port: int = Field(default=8010, ge=1, le=65535)
     remote_runtime_api_url: str = Field(default="", max_length=2000)
     remote_runtime_api_key: str = Field(default="", max_length=500)
     remote_server_image: str = Field(default="", max_length=2000)

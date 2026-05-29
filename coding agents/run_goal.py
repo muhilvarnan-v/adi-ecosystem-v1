@@ -49,6 +49,18 @@ def main() -> None:
     if payload.get("llm_model"):
         os.environ["LLM_MODEL"] = str(payload["llm_model"]).strip()
 
+    # Goal agent OpenHands settings (non-workflow): LLM from Harness profile overrides globals.
+    oh_settings = payload.get("openhands_settings")
+    if isinstance(oh_settings, dict):
+        llm_oh = oh_settings.get("llm")
+        if isinstance(llm_oh, dict):
+            if (llm_oh.get("api_key") or "").strip():
+                os.environ["LLM_API_KEY"] = str(llm_oh["api_key"]).strip()
+            if (llm_oh.get("base_url") or "").strip():
+                os.environ["LLM_BASE_URL"] = str(llm_oh["base_url"]).strip()
+            if (llm_oh.get("model") or "").strip():
+                os.environ["LLM_MODEL"] = str(llm_oh["model"]).strip()
+
     api_key = require_api_key()
     model = resolve_llm_model(None)
 

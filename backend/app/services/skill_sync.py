@@ -107,16 +107,15 @@ def sync_environment_skills_blocking(environment_row: dict[str, Any], user_id: s
     asyncio.run(sync_environment_skills(environment_row, user_id))
 
 
-async def resolve_environment_skill_payloads(
-    environment_row: dict[str, Any],
+async def resolve_skill_attachments_payloads(
+    attachments: list[dict[str, Any]],
     user_id: str,
 ) -> list[dict[str, Any]]:
     """Build OpenHands execution payloads: [{skill_id, files: {path: text}}, ...]."""
-    db = get_firestore()
-    attachments = environment_row.get("skill_attachments") or []
     if not attachments:
         return []
 
+    db = get_firestore()
     skill_ids = {a["skill_id"] for a in attachments}
     by_skill_id = {s["skill_id"]: s for s in db.list_skills(user_id) if s["skill_id"] in skill_ids}
 
@@ -136,13 +135,44 @@ async def resolve_environment_skill_payloads(
     return payloads
 
 
+async def resolve_environment_skill_payloads(
+    environment_row: dict[str, Any],
+    user_id: str,
+) -> list[dict[str, Any]]:
+    """Build OpenHands execution payloads from a sandbox environment's skill attachments."""
+    return await resolve_skill_attachments_payloads(
+        environment_row.get("skill_attachments") or [],
+        user_id,
+    )
+
+
 def resolve_agent_skills_for_execution(agent_row: dict[str, Any], user_id: str) -> list[dict[str, Any]]:
-    """Load skills for an agent's environment (fresh GitHub fetch when configured)."""
-    env_id = agent_row.get("environment_id")
-    if not env_id:
-        return []
-    db = get_firestore()
-    environment_row = db.get_environment(env_id, user_id)
-    if not environment_row:
-        return []
-    return asyncio.run(resolve_environment_skill_payloads(environment_row, user_id))
+    """Load skills attached to the agent, then any from its linked sandbox env (deduped by skill_id)."""
+
+    async def _merge() -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        ordered: list[dict[str, Any]] = []
+
+        agent_att = agent_row.get("skill_attachments") or []
+        for payload in await resolve_skill_attachments_payloads(agent_att, user_id):
+            sid = payload["skill_id"]
+            if sid not in seen:
+                seen.add(sid)
+                ordered.append(payload)
+
+        env_id = agent_row.get("environment_id")
+        if not env_id:
+            return ordered
+        db = get_firestore()
+        environment_row = db.get_environment(env_id, user_id)
+        if not environment_row:
+            return ordered
+        for payload in await resolve_environment_skill_payloads(environment_row, user_id):
+            sid = payload["skill_id"]
+            if sid not in seen:
+                seen.add(sid)
+                ordered.append(payload)
+
+        return ordered
+
+    return asyncio.run(_merge())

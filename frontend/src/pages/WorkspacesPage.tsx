@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createWorkspace, deleteWorkspace, getWorkspaceConfig, listWorkspaces } from '../api/workspaces';
+import { createWorkspace, deleteWorkspace, getWorkspaceConfig, listWorkspaces, updateWorkspace } from '../api/workspaces';
 import { EnvironmentIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type { Environment, SandboxEnvType } from '../types';
 import { registryIdFromDisplayName } from '../utils/registryIdFromDisplayName';
@@ -9,6 +9,16 @@ const DOCKER_SANDBOX_DOC = 'https://docs.openhands.dev/sdk/guides/agent-server/d
 const API_SANDBOX_DOC = 'https://docs.openhands.dev/sdk/guides/agent-server/api-sandbox';
 
 const DEFAULT_DOCKER_IMAGE = 'ghcr.io/openhands/agent-server:latest-python';
+
+/** Hide upstream registry branding in sandbox cards when the image is the bundled default. */
+function formatSandboxImageForDisplay(image: string): string {
+  const t = image.trim();
+  if (!t) return t;
+  if (/openhands/i.test(t)) {
+    return 'Default agent-server image';
+  }
+  return t;
+}
 
 function LoadingIndicator() {
   return (
@@ -31,6 +41,7 @@ export function WorkspacesPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
   const [configPreview, setConfigPreview] = useState<string | null>(null);
   const [previewEnvId, setPreviewEnvId] = useState<string | null>(null);
 
@@ -39,8 +50,8 @@ export function WorkspacesPage() {
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [sandboxType, setSandboxType] = useState<SandboxEnvType>('docker');
-  const [dockerServerImage, setDockerServerImage] = useState(DEFAULT_DOCKER_IMAGE);
-  const [dockerHostPort, setDockerHostPort] = useState(3000);
+  const [dockerServerImage, setDockerServerImage] = useState('');
+  const [dockerHostPort, setDockerHostPort] = useState(8010);
   const [remoteRuntimeApiUrl, setRemoteRuntimeApiUrl] = useState('');
   const [remoteRuntimeApiKey, setRemoteRuntimeApiKey] = useState('');
   const [remoteServerImage, setRemoteServerImage] = useState('');
@@ -65,7 +76,7 @@ export function WorkspacesPage() {
   useEffect(() => {
     if (!showCreateModal) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeCreateModal();
+      if (e.key === 'Escape') closeModal();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -77,23 +88,45 @@ export function WorkspacesPage() {
     setDisplayName('');
     setDescription('');
     setSandboxType('docker');
-    setDockerServerImage(DEFAULT_DOCKER_IMAGE);
+    setDockerServerImage('');
     setDockerHostPort(3000);
     setRemoteRuntimeApiUrl('');
     setRemoteRuntimeApiKey('');
     setRemoteServerImage('');
   }
 
-  function closeCreateModal() {
+  function closeModal() {
     setShowCreateModal(false);
+    setEditingRecordId(null);
     resetForm();
+  }
+
+  function openEdit(env: Environment) {
+    setEditingRecordId(env.id);
+    setEnvId(env.env_id);
+    setEnvIdTouched(true);
+    setDisplayName(env.display_name);
+    setDescription(env.description ?? '');
+    setSandboxType(env.sandbox_type);
+    setDockerServerImage(
+      env.docker_server_image === DEFAULT_DOCKER_IMAGE ? '' : env.docker_server_image,
+    );
+    setDockerHostPort(env.docker_host_port);
+    setRemoteRuntimeApiUrl(env.remote_runtime_api_url ?? '');
+    setRemoteRuntimeApiKey('');
+    setRemoteServerImage(env.remote_server_image ?? '');
+    setShowCreateModal(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!envId.trim() || !displayName.trim()) return;
     if (sandboxType === 'remote') {
-      if (!remoteRuntimeApiUrl.trim() || !remoteRuntimeApiKey.trim() || !remoteServerImage.trim()) {
+      if (!remoteRuntimeApiUrl.trim() || !remoteServerImage.trim()) {
+        setError('Remote sandbox requires runtime URL and server image.');
+        return;
+      }
+      if (!editingRecordId && !remoteRuntimeApiKey.trim()) {
         setError('Remote sandbox requires runtime URL, API key, and server image.');
         return;
       }
@@ -101,22 +134,45 @@ export function WorkspacesPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await createWorkspace({
-        env_id: envId.trim(),
-        display_name: displayName.trim(),
-        description: description.trim(),
-        sandbox_type: sandboxType,
-        docker_server_image: dockerServerImage.trim() || DEFAULT_DOCKER_IMAGE,
-        docker_host_port: dockerHostPort,
-        remote_runtime_api_url: sandboxType === 'remote' ? remoteRuntimeApiUrl.trim() : '',
-        remote_runtime_api_key: sandboxType === 'remote' ? remoteRuntimeApiKey.trim() : '',
-        remote_server_image: sandboxType === 'remote' ? remoteServerImage.trim() : '',
-        skill_attachments: [],
-      });
-      closeCreateModal();
-      await load();
+      if (editingRecordId) {
+        const payload: Parameters<typeof updateWorkspace>[1] = {
+          display_name: displayName.trim(),
+          description: description.trim(),
+          sandbox_type: sandboxType,
+          docker_server_image: dockerServerImage.trim() || DEFAULT_DOCKER_IMAGE,
+          docker_host_port: dockerHostPort,
+          remote_runtime_api_url: sandboxType === 'remote' ? remoteRuntimeApiUrl.trim() : '',
+          remote_server_image: sandboxType === 'remote' ? remoteServerImage.trim() : '',
+        };
+        if (sandboxType === 'remote' && remoteRuntimeApiKey.trim()) {
+          payload.remote_runtime_api_key = remoteRuntimeApiKey.trim();
+        }
+        const updated = await updateWorkspace(editingRecordId, payload);
+        setSandboxes((items) => items.map((x) => (x.id === editingRecordId ? updated : x)));
+      } else {
+        await createWorkspace({
+          env_id: envId.trim(),
+          display_name: displayName.trim(),
+          description: description.trim(),
+          sandbox_type: sandboxType,
+          docker_server_image: dockerServerImage.trim() || DEFAULT_DOCKER_IMAGE,
+          docker_host_port: dockerHostPort,
+          remote_runtime_api_url: sandboxType === 'remote' ? remoteRuntimeApiUrl.trim() : '',
+          remote_runtime_api_key: sandboxType === 'remote' ? remoteRuntimeApiKey.trim() : '',
+          remote_server_image: sandboxType === 'remote' ? remoteServerImage.trim() : '',
+          skill_attachments: [],
+        });
+        await load();
+      }
+      closeModal();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create sandbox environment');
+      setError(
+        err instanceof Error
+          ? err.message
+          : editingRecordId
+            ? 'Failed to update sandbox environment'
+            : 'Failed to create sandbox environment',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -148,17 +204,19 @@ export function WorkspacesPage() {
   }
 
   const createModal = showCreateModal && (
-    <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
+    <div className="modal-overlay" role="presentation" onClick={closeModal}>
       <div
         className="modal modal-lg"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-sandbox-title"
+        aria-labelledby="sandbox-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="create-sandbox-title">Create sandbox environment</h2>
-          <button type="button" className="modal-close" onClick={closeCreateModal} aria-label="Close">
+          <h2 id="sandbox-modal-title">
+            {editingRecordId ? 'Edit sandbox environment' : 'Create sandbox environment'}
+          </h2>
+          <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
             ×
           </button>
         </div>
@@ -171,14 +229,14 @@ export function WorkspacesPage() {
               onChange={(e) => {
                 const v = e.target.value;
                 setDisplayName(v);
-                if (!envIdTouched) {
+                if (!editingRecordId && !envIdTouched) {
                   setEnvId(registryIdFromDisplayName(v));
                 }
               }}
               required
               maxLength={200}
               placeholder="Team Docker runtime"
-              autoFocus
+              autoFocus={!editingRecordId}
             />
           </label>
           <label>
@@ -190,14 +248,16 @@ export function WorkspacesPage() {
                 setEnvId(e.target.value.toLowerCase());
               }}
               required
+              readOnly={!!editingRecordId}
               pattern="[a-z][a-z0-9-]*[a-z0-9]"
               maxLength={63}
               placeholder="team-docker-runtime"
               title="Lowercase letters, numbers, and hyphens. Must start with a letter."
             />
             <span className="field-hint">
-              Auto-filled from the display name; edit if you need a different stable env_id for workflows and agent
-              links.
+              {editingRecordId
+                ? 'Sandbox ID cannot be changed after creation.'
+                : 'Auto-filled from the display name; edit if you need a different stable env_id for workflows and agent links.'}
             </span>
           </label>
           <label>
@@ -207,7 +267,7 @@ export function WorkspacesPage() {
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
               maxLength={2000}
-              placeholder="OpenHands agent-server reachable on this host port, or hosted runtime API."
+              placeholder="Sandboxed agent server on this host port, or a hosted runtime API."
             />
           </label>
 
@@ -241,11 +301,12 @@ export function WorkspacesPage() {
                 <input
                   value={dockerServerImage}
                   onChange={(e) => setDockerServerImage(e.target.value)}
-                  required
                   maxLength={2000}
-                  placeholder={DEFAULT_DOCKER_IMAGE}
+                  placeholder="Leave empty to use the default Python agent-server image."
                 />
-                <span className="field-hint">Default matches OpenHands agent-server Python image.</span>
+                <span className="field-hint">
+                  Default is the platform Python agent-server image if you leave this empty.
+                </span>
               </label>
               <label>
                 Host port
@@ -279,10 +340,10 @@ export function WorkspacesPage() {
                   type="password"
                   value={remoteRuntimeApiKey}
                   onChange={(e) => setRemoteRuntimeApiKey(e.target.value)}
-                  required
+                  required={!editingRecordId}
                   autoComplete="off"
                   maxLength={500}
-                  placeholder="RUNTIME_API_KEY"
+                  placeholder={editingRecordId ? 'Leave blank to keep existing key' : 'RUNTIME_API_KEY'}
                 />
               </label>
               <label>
@@ -292,7 +353,7 @@ export function WorkspacesPage() {
                   onChange={(e) => setRemoteServerImage(e.target.value)}
                   required
                   maxLength={2000}
-                  placeholder="ghcr.io/openhands/agent-server:main-python"
+                  placeholder="e.g. ghcr.io/your-org/agent-server:tag"
                 />
                 <span className="field-hint">Image the runtime API pulls for the sandboxed agent server.</span>
               </label>
@@ -300,12 +361,18 @@ export function WorkspacesPage() {
           )}
 
           <div className="modal-actions">
-            <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+            <button type="button" className="btn btn-secondary" onClick={closeModal}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               <PlusIcon />
-              {submitting ? 'Creating…' : 'Create sandbox environment'}
+              {submitting
+                ? editingRecordId
+                  ? 'Saving…'
+                  : 'Creating…'
+                : editingRecordId
+                  ? 'Save changes'
+                  : 'Create sandbox environment'}
             </button>
           </div>
         </form>
@@ -318,7 +385,7 @@ export function WorkspacesPage() {
       <div className="page-header">
         <h1>Sandbox environments</h1>
         <p className="muted">
-          Configure where OpenHands runs:{' '}
+          Configure where the coding agent runs:{' '}
           <a href={DOCKER_SANDBOX_DOC} target="_blank" rel="noreferrer">
             Docker agent-server
           </a>{' '}
@@ -369,11 +436,13 @@ export function WorkspacesPage() {
                 {env.description && <p className="goal-desc">{env.description}</p>}
                 {env.sandbox_type === 'docker' ? (
                   <p className="muted small">
-                    Image <code>{env.docker_server_image}</code> · host port <strong>{env.docker_host_port}</strong>
+                    Image <code>{formatSandboxImageForDisplay(env.docker_server_image)}</code> · host port{' '}
+                    <strong>{env.docker_host_port}</strong>
                   </p>
                 ) : (
                   <p className="muted small">
-                    <code>{env.remote_runtime_api_url}</code> · image <code>{env.remote_server_image}</code>
+                    <code>{env.remote_runtime_api_url}</code> · image{' '}
+                    <code>{formatSandboxImageForDisplay(env.remote_server_image)}</code>
                     {env.remote_runtime_api_key_set ? ' · API key set' : ''}
                   </p>
                 )}
@@ -397,6 +466,9 @@ export function WorkspacesPage() {
                   <span>Created {new Date(env.created_at).toLocaleString()}</span>
                 </div>
                 <div className="goal-actions">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(env)}>
+                    Edit
+                  </button>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => handlePreviewConfig(env)}>
                     View config
                   </button>

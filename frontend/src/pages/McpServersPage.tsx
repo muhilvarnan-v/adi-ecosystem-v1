@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createMcpServer, deleteMcpServer, listMcpServers } from '../api/mcpServers';
+import { createMcpServer, deleteMcpServer, listMcpServers, updateMcpServer } from '../api/mcpServers';
 import { McpIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type { McpServer } from '../types';
 
@@ -20,6 +20,7 @@ export function McpServersPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -46,7 +47,7 @@ export function McpServersPage() {
   useEffect(() => {
     if (!showCreateModal) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeCreateModal();
+      if (e.key === 'Escape') closeModal();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -60,9 +61,20 @@ export function McpServersPage() {
     setDescription('');
   }
 
-  function closeCreateModal() {
+  function closeModal() {
     setShowCreateModal(false);
+    setEditingId(null);
     resetForm();
+  }
+
+  function openEdit(server: McpServer) {
+    setEditingId(server.id);
+    setName(server.name);
+    setUrl(server.url);
+    setHeaderKey(server.header_key ?? '');
+    setHeaderValue(server.header_value ?? '');
+    setDescription(server.description ?? '');
+    setShowCreateModal(true);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -71,17 +83,28 @@ export function McpServersPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await createMcpServer({
-        name: name.trim(),
-        url: url.trim(),
-        header_key: headerKey.trim(),
-        header_value: headerValue.trim(),
-        description: description.trim(),
-      });
-      closeCreateModal();
-      await load();
+      if (editingId) {
+        const updated = await updateMcpServer(editingId, {
+          name: name.trim(),
+          url: url.trim(),
+          header_key: headerKey.trim(),
+          header_value: headerValue.trim(),
+          description: description.trim(),
+        });
+        setServers((items) => items.map((x) => (x.id === editingId ? updated : x)));
+      } else {
+        await createMcpServer({
+          name: name.trim(),
+          url: url.trim(),
+          header_key: headerKey.trim(),
+          header_value: headerValue.trim(),
+          description: description.trim(),
+        });
+        await load();
+      }
+      closeModal();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create MCP server');
+      setError(e instanceof Error ? e.message : editingId ? 'Failed to update MCP server' : 'Failed to create MCP server');
     } finally {
       setSubmitting(false);
     }
@@ -98,17 +121,17 @@ export function McpServersPage() {
   }
 
   const createModal = showCreateModal && (
-    <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
+    <div className="modal-overlay" role="presentation" onClick={closeModal}>
       <div
         className="modal modal-lg"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-mcp-title"
+        aria-labelledby="mcp-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="create-mcp-title">Add MCP server</h2>
-          <button type="button" className="modal-close" onClick={closeCreateModal} aria-label="Close">
+          <h2 id="mcp-modal-title">{editingId ? 'Edit MCP server' : 'Add MCP server'}</h2>
+          <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
             ×
           </button>
         </div>
@@ -172,12 +195,12 @@ export function McpServersPage() {
             />
           </label>
           <div className="modal-actions">
-            <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+            <button type="button" className="btn btn-secondary" onClick={closeModal}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               <PlusIcon />
-              {submitting ? 'Adding…' : 'Add MCP server'}
+              {submitting ? (editingId ? 'Saving…' : 'Adding…') : editingId ? 'Save changes' : 'Add MCP server'}
             </button>
           </div>
         </form>
@@ -237,6 +260,9 @@ export function McpServersPage() {
                   <span>Created {new Date(server.created_at).toLocaleString()}</span>
                 </div>
                 <div className="goal-actions">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(server)}>
+                    Edit
+                  </button>
                   <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(server.id)}>
                     <TrashIcon />
                     Delete

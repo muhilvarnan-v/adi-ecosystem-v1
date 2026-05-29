@@ -4,7 +4,7 @@ Run one goal across multiple repositories with OpenHands SDK.
 
 Example:
   export LLM_API_KEY=...
-  export LLM_BASE_URL=https://gap-dev.thoughtworks.net
+  export LLM_BASE_URL=https://your-litellm-host/v1
   export LLM_MODEL=openai/ai-ops-gemini-2.5-flash
   python run_multi_repo.py \
     --repo https://github.com/org/repo-a \
@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -38,7 +39,7 @@ os.environ.setdefault("LITELLM_LOG", "ERROR")
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_MODEL = "openai/ai-ops-gemini-2.5-flash"
-DEFAULT_LLM_BASE_URL = "https://gap-dev.thoughtworks.net"
+DEFAULT_LLM_BASE_URL = "https://gap-dev.thoughtworks.net/v1"
 RESULT_FILE = ".openhands_result.json"
 PR_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
@@ -75,6 +76,28 @@ def load_env() -> None:
     load_dotenv(ROOT / ".env")
 
 
+def normalize_openai_compatible_api_base(url: str) -> str:
+    """Ensure host-only OpenAI-compatible bases end with ``/v1``.
+
+    The OpenAI Python client appends paths such as ``/chat/completions`` to
+    ``base_url``. If ``base_url`` is only ``https://host`` (no path), requests
+    go to ``https://host/chat/completions`` instead of ``https://host/v1/chat/completions``,
+    which many LiteLLM / reverse-proxy setups answer with **403** and a tiny HTML page.
+
+    If the URL already has a non-root path (e.g. ``/custom-gateway``), it is left unchanged.
+    """
+    t = (url or "").strip().rstrip("/")
+    if not t:
+        return t
+    parsed = urlparse(t)
+    path = (parsed.path or "").rstrip("/")
+    if path == "":
+        return f"{t}/v1"
+    if path.endswith("/v1"):
+        return t
+    return t
+
+
 def require_api_key() -> str:
     load_env()
     api_key = (os.environ.get("LLM_API_KEY") or "").strip()
@@ -90,9 +113,10 @@ def require_api_key() -> str:
 
 
 def resolve_llm_base_url() -> str:
-    """LiteLLM proxy base URL (OpenHands passes this to litellm as api_base)."""
+    """LiteLLM / OpenAI-compatible API base (OpenHands passes this to litellm as api_base)."""
     load_env()
-    return (os.environ.get("LLM_BASE_URL") or DEFAULT_LLM_BASE_URL).strip().rstrip("/")
+    raw = (os.environ.get("LLM_BASE_URL") or DEFAULT_LLM_BASE_URL).strip()
+    return normalize_openai_compatible_api_base(raw)
 
 
 def resolve_llm_model(cli_model: str | None = None) -> str:
@@ -102,13 +126,23 @@ def resolve_llm_model(cli_model: str | None = None) -> str:
     return (os.environ.get("LLM_MODEL") or DEFAULT_MODEL).strip()
 
 
-def build_llm(model: str, api_key: str):
-    """Create an OpenHands LLM wired to the Thoughtworks LiteLLM gateway."""
+def build_llm(model: str, api_key: str, *, base_url: str | None = None):
+    """Create an OpenHands LLM wired to LiteLLM (or another OpenAI-compatible base).
+
+    When ``base_url`` is omitted or empty, uses ``LLM_BASE_URL`` / ``.env`` / code default.
+    Per-agent profile URLs should be passed here instead of mutating ``os.environ`` so
+    multi-phase workflows do not reuse the previous phase's gateway by mistake.
+    """
     _, _, LLM, _, _, _, _, _ = import_openhands_sdk()
+    explicit = (base_url or "").strip()
+    if explicit:
+        resolved = normalize_openai_compatible_api_base(explicit)
+    else:
+        resolved = resolve_llm_base_url()
     return LLM(
         model=model,
         api_key=api_key,
-        base_url=resolve_llm_base_url(),
+        base_url=resolved,
     )
 
 

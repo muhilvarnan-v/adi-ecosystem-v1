@@ -146,7 +146,10 @@ export function createGoalFromZendesk(
   });
 }
 
-export function updateGoal(id: string, updates: { status?: GoalStatus }) {
+export function updateGoal(
+  id: string,
+  updates: { status?: GoalStatus; title?: string; description?: string },
+) {
   return api.patch<Goal>(`/api/goals/${id}`, updates);
 }
 

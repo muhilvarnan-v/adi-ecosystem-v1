@@ -220,6 +220,7 @@ function goalCanViewLogs(goal: Goal): boolean {
 function GoalCard({
   goal,
   onDelete,
+  onEdit,
   onViewLogs,
   onResume,
   onDragStart,
@@ -227,6 +228,7 @@ function GoalCard({
 }: {
   goal: Goal;
   onDelete: (id: string) => void;
+  onEdit?: (goal: Goal) => void;
   onViewLogs?: (goal: Goal) => void;
   onResume?: (goal: Goal) => void;
   onDragStart: (e: DragEvent, goalId: string) => void;
@@ -287,6 +289,18 @@ function GoalCard({
         )}
       </div>
       <div className="kanban-card-actions">
+        {onEdit && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(goal);
+            }}
+          >
+            Edit
+          </button>
+        )}
         {onResume && goal.resumable && (
           <button
             type="button"
@@ -480,6 +494,9 @@ function ApplicationKanban({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<GoalStatus | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [editGoalTitle, setEditGoalTitle] = useState('');
+  const [editGoalDescription, setEditGoalDescription] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -495,9 +512,12 @@ function ApplicationKanban({
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
 
   useEffect(() => {
-    if (!showCreateModal) return;
+    if (!showCreateModal && !editGoal) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeCreateModal();
+      if (e.key === 'Escape') {
+        if (editGoal) closeEditGoalModal();
+        else closeCreateModal();
+      }
     }
     document.addEventListener('keydown', onKeyDown);
     const prevOverflow = document.body.style.overflow;
@@ -506,7 +526,37 @@ function ApplicationKanban({
       document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = prevOverflow;
     };
-  }, [showCreateModal]);
+  }, [showCreateModal, editGoal]);
+
+  function closeEditGoalModal() {
+    setEditGoal(null);
+    setEditGoalTitle('');
+    setEditGoalDescription('');
+  }
+
+  function openEditGoal(g: Goal) {
+    setEditGoal(g);
+    setEditGoalTitle(g.title);
+    setEditGoalDescription(g.description ?? '');
+  }
+
+  async function handleEditGoalSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!editGoal || !editGoalTitle.trim()) return;
+    setSubmitting(true);
+    try {
+      const updated = await updateGoal(editGoal.id, {
+        title: editGoalTitle.trim(),
+        description: editGoalDescription.trim(),
+      });
+      onGoalsChange((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+      closeEditGoalModal();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Failed to update goal');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function closeCreateModal() {
     setShowCreateModal(false);
@@ -761,6 +811,54 @@ function ApplicationKanban({
     return appGoals.filter((g) => (g.status ?? 'backlog') === laneId);
   }
 
+  const editGoalModal = editGoal && (
+    <div className="modal-overlay" role="presentation" onClick={closeEditGoalModal}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-goal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 id="edit-goal-title">Edit goal</h2>
+          <button type="button" className="modal-close" onClick={closeEditGoalModal} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <form onSubmit={handleEditGoalSubmit} className="form">
+          <label>
+            Title
+            <input
+              value={editGoalTitle}
+              onChange={(e) => setEditGoalTitle(e.target.value)}
+              required
+              maxLength={500}
+              autoFocus
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={editGoalDescription}
+              onChange={(e) => setEditGoalDescription(e.target.value)}
+              rows={4}
+              maxLength={10000}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-secondary" onClick={closeEditGoalModal}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+
   const createModal = showCreateModal && (
     <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
       <div
@@ -883,7 +981,7 @@ function ApplicationKanban({
                 disabled={submitting || !githubRepoLinked || !selectedWorkflowId.trim()}
               >
                 <PlusIcon />
-                {submitting ? 'Starting OpenHands…' : 'Create & run goal'}
+                {submitting ? 'Starting agent…' : 'Create & run goal'}
               </button>
             </div>
           </form>
@@ -946,6 +1044,7 @@ function ApplicationKanban({
   return (
     <>
       {createModal ? createPortal(createModal, document.body) : null}
+      {editGoalModal ? createPortal(editGoalModal, document.body) : null}
       <div className="kanban-board">
         {KANBAN_LANES.map((lane) => {
           const laneGoals = goalsInLane(lane.id);
@@ -988,6 +1087,7 @@ function ApplicationKanban({
                     key={goal.id}
                     goal={goal}
                     onDelete={handleDelete}
+                    onEdit={openEditGoal}
                     onViewLogs={
                       lane.id === 'in_progress' || lane.id === 'done'
                         ? onGoalExecuting
@@ -1029,6 +1129,7 @@ export function ApplicationsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [savingRepoFor, setSavingRepoFor] = useState<string | null>(null);
   const [showAppModal, setShowAppModal] = useState(false);
+  const [editingApplicationId, setEditingApplicationId] = useState<string | null>(null);
   const [appTitle, setAppTitle] = useState('');
   const [appDescription, setAppDescription] = useState('');
   const [appRepoUrl, setAppRepoUrl] = useState('');
@@ -1138,9 +1239,18 @@ export function ApplicationsPage() {
 
   function closeAppModal() {
     setShowAppModal(false);
+    setEditingApplicationId(null);
     setAppTitle('');
     setAppDescription('');
     setAppRepoUrl('');
+  }
+
+  function openEditApplication(app: Application) {
+    setEditingApplicationId(app.id);
+    setAppTitle(app.title);
+    setAppDescription(app.description ?? '');
+    setAppRepoUrl(app.github_repo_url ?? '');
+    setShowAppModal(true);
   }
 
   async function handleRepoChange(applicationId: string, url: string) {
@@ -1158,21 +1268,32 @@ export function ApplicationsPage() {
     }
   }
 
-  async function handleCreateApplication(e: FormEvent) {
+  async function handleAppSubmit(e: FormEvent) {
     e.preventDefault();
     if (!appTitle.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const created = await createApplication(
-        appTitle.trim(),
-        appDescription.trim(),
-        appRepoUrl || null,
-      );
-      setApplications((prev) => [created, ...prev]);
+      if (editingApplicationId) {
+        const updated = await updateApplication(editingApplicationId, {
+          title: appTitle.trim(),
+          description: appDescription.trim(),
+          github_repo_url: appRepoUrl || null,
+        });
+        setApplications((prev) => prev.map((a) => (a.id === editingApplicationId ? updated : a)));
+      } else {
+        const created = await createApplication(
+          appTitle.trim(),
+          appDescription.trim(),
+          appRepoUrl || null,
+        );
+        setApplications((prev) => [created, ...prev]);
+      }
       closeAppModal();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create application');
+      setError(
+        e instanceof Error ? e.message : editingApplicationId ? 'Failed to update application' : 'Failed to create application',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -1201,16 +1322,16 @@ export function ApplicationsPage() {
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-app-title"
+        aria-labelledby="app-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="create-app-title">Create application</h2>
+          <h2 id="app-modal-title">{editingApplicationId ? 'Edit application' : 'Create application'}</h2>
           <button type="button" className="modal-close" onClick={closeAppModal} aria-label="Close">
             ×
           </button>
         </div>
-        <form onSubmit={handleCreateApplication} className="form">
+        <form onSubmit={handleAppSubmit} className="form">
           <label>
             Title
             <input
@@ -1245,7 +1366,7 @@ export function ApplicationsPage() {
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               <PlusIcon />
-              {submitting ? 'Creating…' : 'Create application'}
+              {submitting ? 'Saving…' : editingApplicationId ? 'Save changes' : 'Create application'}
             </button>
           </div>
         </form>
@@ -1311,6 +1432,13 @@ export function ApplicationsPage() {
                 </div>
                 <div className="application-section-actions">
                   <span className="card-count">{goalCountForApp(app.id)} goals</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openEditApplication(app)}
+                  >
+                    Edit
+                  </button>
                   <button
                     type="button"
                     className="btn btn-danger btn-sm"

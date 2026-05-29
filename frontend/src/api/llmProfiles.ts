@@ -13,6 +13,10 @@ export function createLlmProfile(payload: LlmProfileCreatePayload) {
   return api.post<LlmProfile>('/api/llm-profiles', payload);
 }
 
+export function updateLlmProfile(id: string, payload: Partial<LlmProfileCreatePayload>) {
+  return api.patch<LlmProfile>(`/api/llm-profiles/${id}`, payload);
+}
+
 export function deleteLlmProfile(id: string) {
   return api.delete(`/api/llm-profiles/${id}`);
 }

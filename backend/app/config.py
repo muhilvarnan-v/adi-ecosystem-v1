@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # OpenHands coding agent (optional; subprocess also reads os.environ)
     llm_api_key: str = ""
-    llm_base_url: str = "https://gap-dev.thoughtworks.net"
+    llm_base_url: str = "https://gap-dev.thoughtworks.net/v1"
     llm_model: str = "openai/ai-ops-gemini-2.5-flash"
     github_token: str = ""
 

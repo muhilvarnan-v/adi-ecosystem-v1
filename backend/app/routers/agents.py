@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
@@ -9,6 +11,7 @@ from app.schemas.agent import (
     AgentUpdate,
     OpenHandsSchemaResponse,
 )
+from app.schemas.environment import SkillAttachment
 from app.services.firestore import get_firestore
 from app.services.openhands_agent_settings import (
     build_openhands_settings,
@@ -31,6 +34,7 @@ def _to_response(row: dict) -> AgentResponse:
         agent_kind=normalized.get("agent_kind", "openhands"),
         system_prompt=normalized.get("system_prompt", ""),
         environment_id=normalized.get("environment_id"),
+        skill_attachments=[SkillAttachment(**a) for a in normalized.get("skill_attachments") or []],
         mcp_server_ids=normalized.get("mcp_server_ids") or [],
         llm_profile_id=normalized.get("llm_profile_id"),
         tools=normalized.get("tools") or [],
@@ -82,6 +86,32 @@ def _validate_mcp_servers(user_id: str, mcp_server_ids: list[str]) -> None:
             status_code=400,
             detail="Unknown MCP server IDs. Configure servers in Harness → MCP Servers first.",
         )
+
+
+def _validate_skill_attachments(user_id: str, attachments: list[SkillAttachment]) -> None:
+    if not attachments:
+        return
+    db = get_firestore()
+    skills = {s["skill_id"] for s in db.list_skills(user_id)}
+    missing = [a.skill_id for a in attachments if a.skill_id not in skills]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown skill IDs: {', '.join(missing)}. Create skills in Harness first.",
+        )
+
+
+def _generate_unique_agent_id(user_id: str) -> str:
+    """Return a new agent_id that satisfies AgentCreate rules and is unique for this user."""
+    db = get_firestore()
+    for _ in range(48):
+        candidate = "agent-" + secrets.token_hex(8)
+        if not db.get_agent_by_agent_id(user_id, candidate):
+            return candidate
+    raise HTTPException(
+        status_code=500,
+        detail="Could not allocate a unique agent ID; try again.",
+    )
 
 
 def _load_mcp_servers(user_id: str, mcp_ids: list[str]) -> list[dict]:
@@ -136,20 +166,23 @@ def get_agent_config(record_id: str, user_id: str = Depends(get_user_id)):
 @router.post("", response_model=AgentResponse, status_code=201)
 def create_agent(body: AgentCreate, user_id: str = Depends(get_user_id)):
     db = get_firestore()
-    if db.get_agent_by_agent_id(user_id, body.agent_id):
+    agent_id = body.agent_id if body.agent_id is not None else _generate_unique_agent_id(user_id)
+    if db.get_agent_by_agent_id(user_id, agent_id):
         raise HTTPException(status_code=409, detail="An agent with this ID already exists")
 
     _validate_environment(user_id, body.environment_id)
+    _validate_skill_attachments(user_id, body.skill_attachments)
     _validate_mcp_servers(user_id, body.mcp_server_ids)
     _validate_llm_profile(user_id, body.llm_profile_id)
 
     row = db.create_agent(
         user_id=user_id,
-        agent_id=body.agent_id,
+        agent_id=agent_id,
         display_name=body.display_name,
         description=body.description,
         system_prompt=body.system_prompt,
         environment_id=body.environment_id,
+        skill_attachments=[a.model_dump() for a in body.skill_attachments],
         mcp_server_ids=body.mcp_server_ids,
         llm_profile_id=body.llm_profile_id,
         tools=[t.value for t in body.tools],
@@ -180,6 +213,8 @@ def update_agent(
 
     if body.environment_id is not None:
         _validate_environment(user_id, body.environment_id)
+    if body.skill_attachments is not None:
+        _validate_skill_attachments(user_id, body.skill_attachments)
     if body.mcp_server_ids is not None:
         _validate_mcp_servers(user_id, body.mcp_server_ids)
     if body.llm_profile_id is not None:

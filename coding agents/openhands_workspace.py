@@ -30,7 +30,7 @@ def resolve_openhands_workspace(
 
             host = str(spec.get("runtime_host") or "").strip().rstrip("/")
             if not host:
-                port = int(spec.get("host_port") or 3000)
+                port = int(spec.get("host_port") or 8010)
                 host = f"http://127.0.0.1:{port}"
             api_key = (spec.get("runtime_api_key") or "").strip() or None
             return Workspace(working_dir=str(repo_dir), host=host, api_key=api_key)

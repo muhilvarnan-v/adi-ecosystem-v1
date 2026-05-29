@@ -11,6 +11,7 @@ import httpx
 from app.config import get_settings
 from app.services.firestore import get_firestore
 from app.services.goal_run_manager import goal_run_manager
+from app.services.openhands_agent_settings import build_openhands_settings
 from app.services.openhands_runner import run_goal_on_repo
 from app.services.sandbox_execution import resolve_workflow_sandbox_execution
 from app.services.skill_sync import resolve_agent_skills_for_execution
@@ -173,6 +174,7 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
 
         skills: list[dict] = []
         workflow_roles: dict | None = None
+        openhands_settings_for_run: dict[str, Any] | None = None
         use_workflow = workflow_enabled(app, row)
 
         if use_workflow:
@@ -192,6 +194,18 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
                         skills = resolve_agent_skills_for_execution(agent_row, user_id)
                     except Exception as exc:
                         raise RuntimeError(f"Failed to load agent skills: {exc}") from exc
+                    mcp_servers: list[dict] = []
+                    for mcp_id in agent_row.get("mcp_server_ids") or []:
+                        mcp = db.get_mcp_server(mcp_id, user_id)
+                        if mcp:
+                            mcp_servers.append(mcp)
+                    openhands_settings_for_run = build_openhands_settings(
+                        agent_row,
+                        mcp_servers,
+                        settings,
+                        user_id,
+                        include_secrets=True,
+                    )
 
         db.update_goal(
             goal_id,
@@ -320,6 +334,7 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
             on_log=on_log,
             on_workflow=on_workflow if use_workflow else None,
             openhands_sandbox=openhands_sandbox,
+            openhands_settings=openhands_settings_for_run if not use_workflow else None,
         )
         _persist_workflow_graph(goal_id, user_id, workflow_graph)
 

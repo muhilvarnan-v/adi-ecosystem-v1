@@ -13,6 +13,10 @@ export function createAgent(payload: AgentCreatePayload) {
   return api.post<Agent>('/api/agents', payload);
 }
 
+export function updateAgent(id: string, payload: Partial<AgentCreatePayload>) {
+  return api.patch<Agent>(`/api/agents/${id}`, payload);
+}
+
 export function deleteAgent(id: string) {
   return api.delete(`/api/agents/${id}`);
 }

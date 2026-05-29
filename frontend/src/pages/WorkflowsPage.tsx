@@ -1,24 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { DragEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { listAgents } from '../api/agents';
 import { listWorkspaces } from '../api/workspaces';
 import { listWorkflows, saveWorkflows } from '../api/workflows';
-import type { Agent, Environment, WorkflowDefinition, WorkflowRole, WorkflowRoles } from '../types';
-import {
-  DEFAULT_WORKFLOW_STEPS,
-  buildStepsFromFlags,
-  flagsFromSteps,
-  normalizeWorkflowSteps,
-} from '../lib/workflowSteps';
+import { WorkflowEditorModal } from '../components/WorkflowEditorModal';
 import { PlusIcon, TrashIcon } from '../components/Icons';
-
-const PHASE_LABELS: Record<WorkflowRole, string> = {
-  develop: 'Development',
-  review: 'Review',
-  test: 'Test validation',
-  deploy: 'Deployment',
-};
+import type { Agent, Environment, WorkflowDefinition, WorkflowRole } from '../types';
+import { normalizeWorkflowSteps } from '../lib/workflowSteps';
 
 function newWorkflowId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -29,10 +17,42 @@ function emptyWorkflow(): WorkflowDefinition {
   return {
     id: newWorkflowId(),
     name: 'New workflow',
-    steps: [...DEFAULT_WORKFLOW_STEPS],
+    steps: ['develop', 'review', 'test', 'deploy'],
     workflow_roles: {},
     workflow_max_cycles: 3,
     sandbox_environment_id: null,
+  };
+}
+
+function cloneWorkflow(w: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...w,
+    steps: [...normalizeWorkflowSteps(w.steps)],
+    workflow_roles: { ...w.workflow_roles },
+  };
+}
+
+type ModalState =
+  | { type: 'closed' }
+  | { type: 'create'; draft: WorkflowDefinition }
+  | { type: 'edit'; index: number; draft: WorkflowDefinition };
+
+function phaseSummary(steps: WorkflowRole[]): string {
+  const has = (r: WorkflowRole) => steps.includes(r);
+  const parts: string[] = ['Dev'];
+  if (has('review')) parts.push('Review');
+  if (has('test')) parts.push('Test');
+  parts.push('Deploy');
+  return parts.join(' → ');
+}
+
+function normalizeWorkflowRow(w: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...w,
+    steps: normalizeWorkflowSteps(w.steps),
+    workflow_roles: { ...(w.workflow_roles ?? {}) },
+    workflow_max_cycles: w.workflow_max_cycles ?? 3,
+    sandbox_environment_id: w.sandbox_environment_id ?? null,
   };
 }
 
@@ -43,7 +63,7 @@ export function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dragAgentId, setDragAgentId] = useState<string | null>(null);
+  const [modal, setModal] = useState<ModalState>({ type: 'closed' });
 
   useEffect(() => {
     let cancelled = false;
@@ -54,15 +74,7 @@ export function WorkflowsPage() {
         const [wfRes, ag, sb] = await Promise.all([listWorkflows(), listAgents(), listWorkspaces()]);
         if (cancelled) return;
         const raw = wfRes.workflows ?? [];
-        setWorkflows(
-          raw.map((w: WorkflowDefinition) => ({
-            ...w,
-            steps: normalizeWorkflowSteps(w.steps),
-            workflow_roles: { ...(w.workflow_roles ?? {}) },
-            workflow_max_cycles: w.workflow_max_cycles ?? 3,
-            sandbox_environment_id: w.sandbox_environment_id ?? null,
-          })),
-        );
+        setWorkflows(raw.map((w: WorkflowDefinition) => normalizeWorkflowRow(w)));
         setAgents(ag);
         setSandboxes(sb);
       } catch (e) {
@@ -87,15 +99,7 @@ export function WorkflowsPage() {
     try {
       const res = await saveWorkflows(workflows);
       const raw = res.workflows ?? [];
-      setWorkflows(
-        raw.map((w: WorkflowDefinition) => ({
-          ...w,
-          steps: normalizeWorkflowSteps(w.steps),
-          workflow_roles: { ...(w.workflow_roles ?? {}) },
-          workflow_max_cycles: w.workflow_max_cycles ?? 3,
-          sandbox_environment_id: w.sandbox_environment_id ?? null,
-        })),
-      );
+      setWorkflows(raw.map((w: WorkflowDefinition) => normalizeWorkflowRow(w)));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save workflows');
     } finally {
@@ -103,46 +107,62 @@ export function WorkflowsPage() {
     }
   }
 
-  function updateWorkflowAt(index: number, patch: Partial<WorkflowDefinition>) {
-    setWorkflows((prev) => prev.map((w, i) => (i === index ? { ...w, ...patch } : w)));
+  function openCreate() {
+    setModal({ type: 'create', draft: emptyWorkflow() });
   }
 
-  function removeWorkflow(index: number) {
+  function openEdit(index: number) {
+    const w = workflows[index];
+    if (!w) return;
+    setModal({ type: 'edit', index, draft: cloneWorkflow(w) });
+  }
+
+  function closeModal() {
+    setModal({ type: 'closed' });
+  }
+
+  function confirmModal() {
+    if (modal.type === 'closed') return;
+    if (modal.type === 'create') {
+      setWorkflows((prev) => [...prev, normalizeWorkflowRow(modal.draft)]);
+    } else {
+      const { index, draft } = modal;
+      setWorkflows((prev) => prev.map((w, i) => (i === index ? normalizeWorkflowRow(draft) : w)));
+    }
+    setModal({ type: 'closed' });
+  }
+
+  function removeWorkflowAt(index: number) {
     setWorkflows((prev) => prev.filter((_, i) => i !== index));
+    setModal((m) => {
+      if (m.type === 'closed' || m.type === 'create') return m;
+      if (m.index === index) return { type: 'closed' };
+      if (m.index > index) return { type: 'edit', index: m.index - 1, draft: m.draft };
+      return m;
+    });
   }
 
-  function setRoleForWorkflow(
-    wfIndex: number,
-    role: WorkflowRole,
-    agentRecordId: string | undefined,
-  ) {
-    setWorkflows((prev) =>
-      prev.map((w, i) => {
-        if (i !== wfIndex) return w;
-        const nextRoles: WorkflowRoles = { ...w.workflow_roles };
-        if (agentRecordId) nextRoles[role] = agentRecordId;
-        else delete nextRoles[role];
-        return { ...w, workflow_roles: nextRoles };
-      }),
-    );
+  function updateModalDraft(next: WorkflowDefinition) {
+    setModal((m) => {
+      if (m.type === 'closed') return m;
+      if (m.type === 'create') return { type: 'create', draft: next };
+      return { type: 'edit', index: m.index, draft: next };
+    });
   }
 
-  function onDragAgentStart(e: DragEvent, agentId: string) {
-    setDragAgentId(agentId);
-    e.dataTransfer.effectAllowed = 'copy';
-    e.dataTransfer.setData('text/agent-id', agentId);
-  }
-
-  function onDragAgentEnd() {
-    setDragAgentId(null);
-  }
-
-  function onDropOnPhase(e: DragEvent, wfIndex: number, role: WorkflowRole) {
-    e.preventDefault();
-    const id = e.dataTransfer.getData('text/agent-id') || dragAgentId;
-    if (id) setRoleForWorkflow(wfIndex, role, id);
-    setDragAgentId(null);
-  }
+  const modalEl =
+    modal.type !== 'closed' ? (
+      <WorkflowEditorModal
+        mode={modal.type === 'create' ? 'create' : 'edit'}
+        draft={modal.draft}
+        onChange={updateModalDraft}
+        agents={agents}
+        sandboxes={sandboxes}
+        onClose={closeModal}
+        onConfirm={confirmModal}
+        onDelete={modal.type === 'edit' ? () => removeWorkflowAt(modal.index) : undefined}
+      />
+    ) : null;
 
   return (
     <div className="page workflows-page">
@@ -150,10 +170,8 @@ export function WorkflowsPage() {
         <div>
           <h1>Workflows</h1>
           <p className="muted">
-            Reusable implementation pipelines for your account. Drag agents from the right onto each phase,
-            attach an optional OpenHands sandbox environment, then pick a workflow when you{' '}
-            <Link to="/">create a goal</Link> on an application. Configure sandboxes under{' '}
-            <Link to="/harness/sandbox-envs">Harness → Sandbox envs</Link>.
+            Reusable implementation pipelines. Open a workflow to configure phases and drag agents onto each step. Pick
+            a workflow when you <Link to="/">create a goal</Link> on an application.
           </p>
         </div>
       </header>
@@ -161,12 +179,7 @@ export function WorkflowsPage() {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="workflows-toolbar workflows-toolbar-row">
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          disabled={loading}
-          onClick={() => setWorkflows((prev) => [...prev, emptyWorkflow()])}
-        >
+        <button type="button" className="btn btn-secondary btn-sm" disabled={loading} onClick={openCreate}>
           <PlusIcon />
           Add workflow
         </button>
@@ -175,169 +188,53 @@ export function WorkflowsPage() {
         </button>
       </div>
 
-      <div className="workflows-page-layout">
-        <div className="workflows-main">
-          {loading ? (
-            <p className="muted">Loading workflows…</p>
-          ) : (
-            <div className="workflows-list">
-              {workflows.length === 0 ? (
-                <div className="workflows-empty card-surface">
-                  <p>No saved workflows yet. Add one, assign agents, and save.</p>
-                </div>
-              ) : (
-                workflows.map((wf, wi) => {
-                  const { includeReview, includeTest } = flagsFromSteps(wf.steps);
-                  const steps = wf.steps;
-                  return (
-                    <article key={wf.id} className="workflow-editor card-surface">
-                      <div className="workflow-editor-header">
-                        <label className="workflow-editor-name">
-                          <span className="muted small">Name</span>
-                          <input
-                            value={wf.name}
-                            onChange={(e) => updateWorkflowAt(wi, { name: e.target.value })}
-                            maxLength={200}
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm workflow-editor-remove"
-                          onClick={() => removeWorkflow(wi)}
-                          aria-label="Remove workflow"
-                        >
-                          <TrashIcon />
-                        </button>
-                      </div>
-
-                      <div className="workflow-editor-toggles">
-                        <label className="checkbox-row">
-                          <input
-                            type="checkbox"
-                            checked={includeReview}
-                            onChange={(e) =>
-                              updateWorkflowAt(wi, {
-                                steps: buildStepsFromFlags(e.target.checked, includeTest),
-                              })
-                            }
-                          />
-                          Include code review
-                        </label>
-                        <label className="checkbox-row">
-                          <input
-                            type="checkbox"
-                            checked={includeTest}
-                            onChange={(e) =>
-                              updateWorkflowAt(wi, {
-                                steps: buildStepsFromFlags(includeReview, e.target.checked),
-                              })
-                            }
-                          />
-                          Include test validation
-                        </label>
-                      </div>
-
-                      <label className="workflow-editor-cycles">
-                        Max implementation cycles (develop → … before deploy)
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={wf.workflow_max_cycles}
-                          onChange={(e) =>
-                            updateWorkflowAt(wi, { workflow_max_cycles: Number(e.target.value) || 3 })
-                          }
-                        />
-                      </label>
-
-                      <label className="workflow-editor-sandbox">
-                        Sandbox environment (optional)
-                        <select
-                          value={wf.sandbox_environment_id ?? ''}
-                          onChange={(e) =>
-                            updateWorkflowAt(wi, {
-                              sandbox_environment_id: e.target.value.trim() || null,
-                            })
-                          }
-                        >
-                          <option value="">— None —</option>
-                          {sandboxes.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.display_name} ({s.env_id})
-                            </option>
-                          ))}
-                        </select>
-                        <span className="field-hint muted small">
-                          OpenHands Docker host port or remote runtime API from Harness.
-                        </span>
-                      </label>
-
-                      <div className="workflow-drop-grid">
-                        {steps.map((role) => (
-                          <div key={role} className="workflow-phase-column">
-                            <div className="workflow-phase-title">{PHASE_LABELS[role]}</div>
-                            <div
-                              className="workflow-drop-zone"
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => onDropOnPhase(e, wi, role)}
-                            >
-                              {wf.workflow_roles[role] ? (
-                                <div className="workflow-drop-assigned">
-                                  <span>
-                                    {agents.find((x) => x.id === wf.workflow_roles[role])?.display_name ??
-                                      wf.workflow_roles[role]}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => setRoleForWorkflow(wi, role, undefined)}
-                                  >
-                                    Clear
-                                  </button>
-                                </div>
-                              ) : (
-                                <span className="muted small">Drop agent here</span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="muted small workflow-editor-hint">
-                        Development and Deployment agents are required when this workflow is used for a goal.
-                      </p>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          )}
+      {loading ? (
+        <p className="muted">Loading workflows…</p>
+      ) : workflows.length === 0 ? (
+        <div className="workflows-empty card-surface workflows-list-minimal-empty">
+          <p>No saved workflows yet.</p>
+          <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>
+            Add workflow
+          </button>
         </div>
-
-        <aside className="workflows-agents-rail" aria-label="Agents to assign">
-          <h3 className="workflows-section-title">Agents</h3>
-          <p className="muted small">Drag onto a phase column on the left.</p>
-          <div className="workflows-agent-chips">
-            {agents.length === 0 ? (
-              <p className="muted small">
-                No agents yet. <Link to="/agents">Create agents</Link> first.
-              </p>
-            ) : (
-              agents.map((a) => (
-                <div
-                  key={a.id}
-                  className={`workflows-agent-chip${dragAgentId === a.id ? ' dragging' : ''}`}
-                  draggable
-                  onDragStart={(e) => onDragAgentStart(e, a.id)}
-                  onDragEnd={onDragAgentEnd}
-                >
-                  <strong>{a.display_name}</strong>
-                  <span className="muted small">{a.agent_id}</span>
+      ) : (
+        <ul className="workflows-list-minimal" aria-label="Workflows">
+          {workflows.map((wf, i) => {
+            const steps = normalizeWorkflowSteps(wf.steps);
+            const sb = wf.sandbox_environment_id
+              ? sandboxes.find((s) => s.id === wf.sandbox_environment_id)
+              : null;
+            return (
+              <li key={wf.id} className="workflows-list-minimal-row card-surface">
+                <div className="workflows-list-minimal-main">
+                  <span className="workflows-list-minimal-name">{wf.name || 'Untitled'}</span>
+                  <span className="workflows-list-minimal-meta muted small">{phaseSummary(steps)}</span>
+                  {sb && (
+                    <span className="workflows-list-minimal-sandbox muted small" title={sb.env_id}>
+                      Sandbox: {sb.display_name}
+                    </span>
+                  )}
                 </div>
-              ))
-            )}
-          </div>
-        </aside>
-      </div>
+                <div className="workflows-list-minimal-actions">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(i)}>
+                    View / edit
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm workflows-list-minimal-trash"
+                    onClick={() => removeWorkflowAt(i)}
+                    aria-label={`Remove ${wf.name || 'workflow'}`}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {modalEl}
     </div>
   );
 }

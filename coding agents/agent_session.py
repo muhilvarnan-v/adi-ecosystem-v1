@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -68,9 +67,7 @@ def create_agent_and_conversation(
     settings = openhands_settings or {}
     llm_cfg = settings.get("llm") or {}
     model = str(llm_cfg.get("model") or resolve_llm_model(None)).strip()
-    base_url = llm_cfg.get("base_url")
-    if base_url:
-        os.environ["LLM_BASE_URL"] = str(base_url).strip()
+    profile_base = (llm_cfg.get("base_url") or "").strip().rstrip("/") or None
     profile_api_key = (llm_cfg.get("api_key") or "").strip()
     effective_api_key = profile_api_key or api_key
 
@@ -101,7 +98,7 @@ def create_agent_and_conversation(
         if installed_skills and on_log:
             on_log(f"Installed skills: {', '.join(installed_skills)}")
 
-    llm = build_llm(model=model, api_key=effective_api_key)
+    llm = build_llm(model=model, api_key=effective_api_key, base_url=profile_base)
     agent_context = AgentContext(load_project_skills=True) if installed_skills else None
 
     mcp_config = settings.get("mcp_config") or build_mcp_config(mcp_servers)

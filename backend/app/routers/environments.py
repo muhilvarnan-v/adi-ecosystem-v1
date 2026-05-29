@@ -27,7 +27,7 @@ def _sandbox_fields(row: dict) -> dict:
         "sandbox_type": sandbox_type,
         "docker_server_image": (row.get("docker_server_image") or "").strip()
         or "ghcr.io/openhands/agent-server:latest-python",
-        "docker_host_port": int(row.get("docker_host_port") or 3000),
+        "docker_host_port": int(row.get("docker_host_port") or 8010),
         "remote_runtime_api_url": (row.get("remote_runtime_api_url") or "").strip(),
         "remote_server_image": (row.get("remote_server_image") or "").strip(),
         "remote_runtime_api_key_set": bool((row.get("remote_runtime_api_key") or "").strip()),

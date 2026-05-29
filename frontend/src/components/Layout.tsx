@@ -37,7 +37,7 @@ export function Layout() {
           </NavLink>
         </nav>
         <div className="sidebar-footer">
-          <p>Applications, workflows, agents, LLM models, and harness tools for OpenHands.</p>
+          <p>Applications, workflows, agents, LLM models, and harness tools for coding agents.</p>
         </div>
       </aside>
       <main className="main">

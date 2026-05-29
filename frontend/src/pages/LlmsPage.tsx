@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createLlmProfile, deleteLlmProfile, listLlmProfiles, listLlmVendors } from '../api/llmProfiles';
+import { createLlmProfile, deleteLlmProfile, listLlmProfiles, listLlmVendors, updateLlmProfile } from '../api/llmProfiles';
 import { LlmIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type { LlmProfile, LlmVendorType } from '../types';
 
-const DEFAULT_BASE_URL = 'https://gap-dev.thoughtworks.net';
+const DEFAULT_BASE_URL = 'https://gap-dev.thoughtworks.net/v1';
 
 function LoadingIndicator() {
   return (
@@ -22,6 +22,8 @@ export function LlmsPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   const [vendorType, setVendorType] = useState<LlmVendorType>('litellm');
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
@@ -49,7 +51,7 @@ export function LlmsPage() {
   useEffect(() => {
     if (!showCreateModal) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeCreateModal();
+      if (e.key === 'Escape') closeModal();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -64,29 +66,58 @@ export function LlmsPage() {
     setVendorType('litellm');
   }
 
-  function closeCreateModal() {
+  function closeModal() {
     setShowCreateModal(false);
+    setEditingId(null);
     resetForm();
+  }
+
+  function openEdit(profile: LlmProfile) {
+    setEditingId(profile.id);
+    setVendorType(profile.vendor_type);
+    setDisplayName(profile.display_name);
+    setDescription(profile.description ?? '');
+    setBaseUrl(profile.base_url);
+    setModel(profile.model);
+    setApiKey('');
+    setShowCreateModal(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!displayName.trim() || !baseUrl.trim() || !model.trim() || !apiKey.trim()) return;
+    if (!displayName.trim() || !baseUrl.trim() || !model.trim()) return;
+    if (!editingId && !apiKey.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      await createLlmProfile({
-        display_name: displayName.trim(),
-        description: description.trim(),
-        vendor_type: vendorType,
-        base_url: baseUrl.trim(),
-        model: model.trim(),
-        api_key: apiKey.trim(),
-      });
-      closeCreateModal();
-      await load();
+      if (editingId) {
+        const body: Parameters<typeof updateLlmProfile>[1] = {
+          display_name: displayName.trim(),
+          description: description.trim(),
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+        };
+        if (apiKey.trim()) {
+          body.api_key = apiKey.trim();
+        }
+        const updated = await updateLlmProfile(editingId, body);
+        setProfiles((items) => items.map((x) => (x.id === editingId ? updated : x)));
+      } else {
+        await createLlmProfile({
+          display_name: displayName.trim(),
+          description: description.trim(),
+          vendor_type: vendorType,
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+          api_key: apiKey.trim(),
+        });
+        await load();
+      }
+      closeModal();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create LLM profile');
+      setError(
+        e instanceof Error ? e.message : editingId ? 'Failed to update LLM profile' : 'Failed to create LLM profile',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -103,17 +134,17 @@ export function LlmsPage() {
   }
 
   const createModal = showCreateModal && (
-    <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
+    <div className="modal-overlay" role="presentation" onClick={closeModal}>
       <div
         className="modal modal-lg"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-llm-title"
+        aria-labelledby="llm-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="create-llm-title">Add LLM model</h2>
-          <button type="button" className="modal-close" onClick={closeCreateModal} aria-label="Close">
+          <h2 id="llm-modal-title">{editingId ? 'Edit LLM model' : 'Add LLM model'}</h2>
+          <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
             ×
           </button>
         </div>
@@ -128,7 +159,7 @@ export function LlmsPage() {
               <option value="litellm">LiteLLM</option>
             </select>
             <span className="field-hint">
-              OpenHands agents use LiteLLM for provider-agnostic model routing.
+              Coding agents use LiteLLM for provider-agnostic model routing.
             </span>
           </label>
 
@@ -142,7 +173,7 @@ export function LlmsPage() {
                   required
                   maxLength={200}
                   placeholder="GAP Gemini Flash"
-                  autoFocus
+                  autoFocus={!editingId}
                 />
               </label>
               <label>
@@ -161,7 +192,7 @@ export function LlmsPage() {
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   required
-                  placeholder="https://gap-dev.thoughtworks.net"
+                  placeholder="https://your-litellm-host/v1"
                 />
               </label>
               <label>
@@ -181,24 +212,26 @@ export function LlmsPage() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  required
+                  required={!editingId}
                   autoComplete="off"
-                  placeholder="sk-…"
+                  placeholder={editingId ? 'Leave blank to keep existing key' : 'sk-…'}
                 />
                 <span className="field-hint">
-                  Stored securely for agent runs; not shown again after save.
+                  {editingId
+                    ? 'Only enter a new key when rotating credentials; leave blank to keep the saved key.'
+                    : 'Stored securely for agent runs; not shown again after save.'}
                 </span>
               </label>
             </>
           )}
 
           <div className="modal-actions">
-            <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+            <button type="button" className="btn btn-secondary" onClick={closeModal}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               <PlusIcon />
-              {submitting ? 'Saving…' : 'Add model'}
+              {submitting ? 'Saving…' : editingId ? 'Save changes' : 'Add model'}
             </button>
           </div>
         </form>
@@ -211,7 +244,7 @@ export function LlmsPage() {
       <div className="page-header">
         <h1>LLM</h1>
         <p className="muted">
-          Register LiteLLM gateways (base URL, model, API key). Agents select a profile so OpenHands
+          Register LiteLLM gateways (base URL, model, API key). Agents select a profile so the runtime
           initializes the correct{' '}
           <a href="https://docs.openhands.dev/sdk/arch/llm" target="_blank" rel="noreferrer">
             LLM
@@ -261,6 +294,9 @@ export function LlmsPage() {
                   <span>Created {new Date(profile.created_at).toLocaleString()}</span>
                 </div>
                 <div className="goal-actions">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEdit(profile)}>
+                    Edit
+                  </button>
                   <button
                     type="button"
                     className="btn btn-danger btn-sm"

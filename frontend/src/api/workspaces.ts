@@ -3,13 +3,17 @@ import type { Environment, EnvironmentConfig, EnvironmentCreatePayload } from '.
 
 const BASE = '/api/workspaces';
 
-/** Sandbox environments (Docker / remote OpenHands runtime); stored as environments in Firestore. */
+/** Sandbox environments (Docker or hosted remote runtime); stored as environments in Firestore. */
 export function listWorkspaces() {
   return api.get<Environment[]>(BASE);
 }
 
 export function createWorkspace(payload: EnvironmentCreatePayload) {
   return api.post<Environment>(BASE, payload);
+}
+
+export function updateWorkspace(id: string, payload: Partial<Omit<EnvironmentCreatePayload, 'env_id'>>) {
+  return api.patch<Environment>(`${BASE}/${id}`, payload);
 }
 
 export function deleteWorkspace(id: string) {

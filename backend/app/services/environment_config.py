@@ -42,7 +42,7 @@ class EnvironmentConfigBuilder:
                 "kind": "docker",
                 "server_image": (row.get("docker_server_image") or "").strip()
                 or "ghcr.io/openhands/agent-server:latest-python",
-                "host_port": int(row.get("docker_host_port") or 3000),
+                "host_port": int(row.get("docker_host_port") or 8010),
             }
 
         if sources:

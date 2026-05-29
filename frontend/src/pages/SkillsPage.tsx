@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { listGitHubRepos, listIntegrations } from '../api/integrations';
-import { createSkill, createSkillFromGitHub, deleteSkill, listSkills } from '../api/skills';
+import { createSkill, createSkillFromGitHub, deleteSkill, listSkills, updateSkill } from '../api/skills';
 import { ExternalLinkIcon, PlusIcon, SkillIcon, TrashIcon } from '../components/Icons';
 import type { GitHubRepo, IntegrationStatus, Skill } from '../types';
 import { registryIdFromDisplayName } from '../utils/registryIdFromDisplayName';
@@ -29,6 +29,7 @@ export function SkillsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [createTab, setCreateTab] = useState<'manual' | 'github'>('manual');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
 
   const [skillId, setSkillId] = useState('');
   const [skillIdTouched, setSkillIdTouched] = useState(false);
@@ -111,7 +112,7 @@ export function SkillsPage() {
   useEffect(() => {
     if (!showCreateModal) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeCreateModal();
+      if (e.key === 'Escape') closeModal();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -133,9 +134,21 @@ export function SkillsPage() {
     return selectedRepo.trim();
   }
 
-  function closeCreateModal() {
+  function closeModal() {
     setShowCreateModal(false);
+    setEditingSkillId(null);
     resetForm();
+  }
+
+  function openEditSkill(skill: Skill) {
+    setEditingSkillId(skill.id);
+    setSkillId(skill.skill_id);
+    setSkillIdTouched(true);
+    setDisplayName(skill.display_name);
+    setDescription(skill.description ?? '');
+    setSkillMd('');
+    setCreateTab('manual');
+    setShowCreateModal(true);
   }
 
   function handleRepoChange(fullName: string) {
@@ -146,20 +159,35 @@ export function SkillsPage() {
 
   async function handleManualSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!skillId.trim() || !displayName.trim() || !skillMd.trim()) return;
+    if (!skillId.trim() || !displayName.trim()) return;
+    if (!editingSkillId && !skillMd.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      await createSkill({
-        skill_id: skillId.trim(),
-        display_name: displayName.trim(),
-        description: description.trim(),
-        skill_md: skillMd,
-      });
-      closeCreateModal();
-      await load();
+      if (editingSkillId) {
+        const patch: { display_name: string; description: string; skill_md?: string } = {
+          display_name: displayName.trim(),
+          description: description.trim(),
+        };
+        if (skillMd.trim()) {
+          patch.skill_md = skillMd.trim();
+        }
+        const updated = await updateSkill(editingSkillId, patch);
+        setSkills((s) => s.map((x) => (x.id === editingSkillId ? updated : x)));
+      } else {
+        await createSkill({
+          skill_id: skillId.trim(),
+          display_name: displayName.trim(),
+          description: description.trim(),
+          skill_md: skillMd,
+        });
+        await load();
+      }
+      closeModal();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create skill');
+      setError(
+        e instanceof Error ? e.message : editingSkillId ? 'Failed to update skill' : 'Failed to create skill',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -189,7 +217,7 @@ export function SkillsPage() {
         base_path: basePath.trim(),
         include_patterns: patterns.length > 0 ? patterns : DEFAULT_INCLUDE_PATTERNS,
       });
-      closeCreateModal();
+      closeModal();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to import skill from GitHub');
@@ -213,21 +241,73 @@ export function SkillsPage() {
   }
 
   const createModal = showCreateModal && (
-    <div className="modal-overlay" role="presentation" onClick={closeCreateModal}>
+    <div className="modal-overlay" role="presentation" onClick={closeModal}>
       <div
         className="modal modal-lg"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="create-skill-title"
+        aria-labelledby="skill-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 id="create-skill-title">Create skill</h2>
-          <button type="button" className="modal-close" onClick={closeCreateModal} aria-label="Close">
+          <h2 id="skill-modal-title">{editingSkillId ? 'Edit skill' : 'Create skill'}</h2>
+          <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
             ×
           </button>
         </div>
 
+        {editingSkillId ? (
+          <form onSubmit={handleManualSubmit} className="form">
+            <label>
+              Display name
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+                maxLength={200}
+                placeholder="My Skill"
+                autoFocus
+              />
+            </label>
+            <label>
+              Skill ID
+              <input value={skillId} readOnly className="muted" />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder="What does this skill help agents do?"
+              />
+            </label>
+            <label>
+              SKILL.md (optional)
+              <textarea
+                value={skillMd}
+                onChange={(e) => setSkillMd(e.target.value)}
+                rows={8}
+                placeholder="Paste a full replacement for SKILL.md, or leave blank to keep the current file in the registry."
+              />
+              <span className="field-hint">
+                Updating SKILL.md re-publishes the skill in the registry. Leave blank if you only need to change the
+                title or description.
+              </span>
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={closeModal}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={submitting}>
+                <PlusIcon />
+                {submitting ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <>
         <div className="tabs">
           <button
             type="button"
@@ -306,7 +386,7 @@ export function SkillsPage() {
               />
             </label>
             <div className="modal-actions">
-              <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+              <button type="button" className="btn btn-secondary" onClick={closeModal}>
                 Cancel
               </button>
               <button type="submit" className="btn btn-primary" disabled={submitting}>
@@ -417,7 +497,7 @@ export function SkillsPage() {
               <span className="field-hint">Comma-separated glob patterns (must include SKILL.md)</span>
             </label>
             <div className="modal-actions">
-              <button type="button" className="btn btn-secondary" onClick={closeCreateModal}>
+              <button type="button" className="btn btn-secondary" onClick={closeModal}>
                 Cancel
               </button>
               <button
@@ -431,6 +511,8 @@ export function SkillsPage() {
             </div>
           </form>
         )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -440,7 +522,7 @@ export function SkillsPage() {
       <div className="page-header">
         <h1>Skills</h1>
         <p className="muted">
-          Configure OpenHands-compatible skills (SKILL.md plus scripts/, references/, and assets/). Add them manually or
+          Configure agent-compatible skills (SKILL.md plus scripts/, references/, and assets/). Add them manually or
           link a GitHub repo. GitHub skills are re-fetched when you create an agent and when a goal runs with that agent.
         </p>
       </div>
@@ -568,6 +650,9 @@ export function SkillsPage() {
                       <ExternalLinkIcon />
                     </a>
                   ) : null}
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEditSkill(skill)}>
+                    Edit
+                  </button>
                   <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDelete(skill.id)}>
                     <TrashIcon />
                     Delete

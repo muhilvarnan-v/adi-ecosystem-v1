@@ -1,8 +1,11 @@
 from datetime import datetime
 from enum import Enum
 
+import re
+
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.environment import SkillAttachment
 from app.services.openhands_agent_settings import DEFAULT_OPENHANDS_TOOLS
 
 # Legacy Gemini builtin tools — ignored for OpenHands agents; kept for old records.
@@ -37,12 +40,23 @@ class SecurityAnalyzerType(str, Enum):
     NONE = "none"
 
 
+_AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*[a-z0-9]$")
+
+
 class AgentCreate(BaseModel):
-    agent_id: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$")
+    agent_id: str | None = Field(
+        default=None,
+        max_length=63,
+        description="Optional stable ID for workflows; if omitted, the server generates one.",
+    )
     display_name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
     system_prompt: str = Field(default="", max_length=50000)
     environment_id: str | None = Field(default=None, max_length=200)
+    skill_attachments: list[SkillAttachment] = Field(
+        default_factory=list,
+        description="Harness skills (by skill_id) materialized into the repo for this agent at run time.",
+    )
     mcp_server_ids: list[str] = Field(default_factory=list)
     llm_profile_id: str | None = Field(
         default=None,
@@ -63,6 +77,28 @@ class AgentCreate(BaseModel):
     confirmation_mode: bool = Field(default=False)
     security_analyzer: SecurityAnalyzerType = SecurityAnalyzerType.LLM
 
+    @field_validator("agent_id", mode="before")
+    @classmethod
+    def _normalize_optional_agent_id(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            s = v.strip().lower()
+            return s if s else None
+        return None
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id_format(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if len(v) < 1 or not _AGENT_ID_RE.fullmatch(v):
+            raise ValueError(
+                "agent_id must start with a letter, end with a letter or digit, "
+                "and use only lowercase letters, digits, and hyphens (max 63 chars)."
+            )
+        return v
+
     @field_validator("tools", mode="before")
     @classmethod
     def _tools_default(cls, v: object) -> list:
@@ -76,6 +112,7 @@ class AgentUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     system_prompt: str | None = Field(default=None, max_length=50000)
     environment_id: str | None = Field(default=None, max_length=200)
+    skill_attachments: list[SkillAttachment] | None = None
     mcp_server_ids: list[str] | None = None
     llm_profile_id: str | None = Field(default=None, min_length=1)
     tools: list[OpenHandsToolName] | None = None
@@ -100,6 +137,7 @@ class AgentResponse(BaseModel):
     agent_kind: str = "openhands"
     system_prompt: str = ""
     environment_id: str | None = None
+    skill_attachments: list[SkillAttachment] = Field(default_factory=list)
     mcp_server_ids: list[str] = Field(default_factory=list)
     llm_profile_id: str | None = None
     tools: list[str] = Field(default_factory=list)

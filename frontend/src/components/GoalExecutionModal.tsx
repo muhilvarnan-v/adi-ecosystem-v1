@@ -225,7 +225,7 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
           <div>
             <h2 id="goal-execution-title">{goal.title}</h2>
             <p className="muted small goal-execution-subtitle">
-              {isWorkflow ? 'Multi-agent workflow' : 'OpenHands coding agent'} ·{' '}
+              {isWorkflow ? 'Multi-agent workflow' : 'Coding agent'} ·{' '}
               <span className={`execution-status execution-status-${status}`}>{status}</span>
             </p>
           </div>
