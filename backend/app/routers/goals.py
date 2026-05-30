@@ -21,6 +21,7 @@ from app.services.goal_execution import (
     schedule_goal_execution,
     schedule_goal_resume,
 )
+from app.services.zendesk_goal import create_zendesk_goal_from_ticket_fields
 from app.services.workflow_config import (
     WORKFLOW_ROLES,
     normalize_workflow_steps,
@@ -419,34 +420,15 @@ async def create_goal_from_zendesk(body: GoalFromZendesk, user_id: str = Depends
             integration.get("account_label"),
         )
 
-    fields = zendesk.ticket_to_goal_fields(ticket, subdomain)
-    app = db.get_application(body.application_id, user_id)
-    if not (app and app.get("github_repo_url")):
-        raise HTTPException(
-            status_code=400,
-            detail="Link a GitHub repository to this application before creating a goal.",
-        )
-    roles = normalize_workflow_roles(body.workflow_roles)
-    merged, steps, max_cycles, wf_id = _build_goal_workflow_snapshot(
-        db, user_id, app, roles, body.workflow_id
-    )
-    row = db.create_goal(
+    row = create_zendesk_goal_from_ticket_fields(
+        db,
         user_id=user_id,
-        title=fields["title"] or f"Zendesk ticket {body.ticket_id}",
-        description=fields["description"],
-        source=GoalSource.ZENDESK.value,
         application_id=body.application_id,
-        external_id=fields["external_id"],
-        external_url=fields["external_url"],
-        agent_record_id=merged.get("develop"),
-        workflow_roles=merged,
-        workflow_id=wf_id,
-        workflow_steps=steps,
-        workflow_max_cycles=max_cycles,
-        status=GoalStatus.IN_PROGRESS.value,
-        execution_status=GoalExecutionStatus.QUEUED.value,
+        ticket=ticket,
+        subdomain=subdomain,
+        workflow_id=body.workflow_id,
+        workflow_roles=body.workflow_roles,
     )
-    schedule_goal_execution(row["id"], user_id)
     return _to_response(row)
 
 

@@ -42,6 +42,8 @@ class FirestoreService:
         github_repo_url: str | None = None,
         workflow_roles: dict[str, str] | None = None,
         workflow_max_cycles: int = 3,
+        self_healing_enabled: bool = False,
+        self_healing_workflow_id: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now()
         data = {
@@ -51,6 +53,8 @@ class FirestoreService:
             "github_repo_url": github_repo_url,
             "workflow_roles": workflow_roles or {},
             "workflow_max_cycles": workflow_max_cycles,
+            "self_healing_enabled": self_healing_enabled,
+            "self_healing_workflow_id": self_healing_workflow_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -70,6 +74,13 @@ class FirestoreService:
             row["id"] = doc.id
             results.append(row)
         return results
+
+    def list_self_healing_applications(self, user_id: str) -> list[dict[str, Any]]:
+        return [
+            app
+            for app in self.list_applications(user_id)
+            if app.get("self_healing_enabled")
+        ]
 
     def get_application(self, application_id: str, user_id: str) -> dict[str, Any] | None:
         doc = self._db.collection(APPLICATIONS_COLLECTION).document(application_id).get()
@@ -194,6 +205,27 @@ class FirestoreService:
             results.append(row)
         return results
 
+    def find_goal_by_external_id(
+        self,
+        user_id: str,
+        application_id: str,
+        source: str,
+        external_id: str,
+    ) -> dict[str, Any] | None:
+        query = (
+            self._db.collection(GOALS_COLLECTION)
+            .where(filter=firestore.FieldFilter("user_id", "==", user_id))
+            .where(filter=firestore.FieldFilter("application_id", "==", application_id))
+            .where(filter=firestore.FieldFilter("source", "==", source))
+            .where(filter=firestore.FieldFilter("external_id", "==", external_id))
+            .limit(1)
+        )
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            return row
+        return None
+
     def get_goal(self, goal_id: str, user_id: str) -> dict[str, Any] | None:
         doc = self._db.collection(GOALS_COLLECTION).document(goal_id).get()
         if not doc.exists:
@@ -278,6 +310,19 @@ class FirestoreService:
 
     def list_integrations(self, user_id: str) -> list[dict[str, Any]]:
         query = self._db.collection(INTEGRATIONS_COLLECTION).where(filter=firestore.FieldFilter("user_id", "==", user_id))
+        results = []
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            results.append(row)
+        return results
+
+    def list_zendesk_integrations_by_subdomain(self, subdomain: str) -> list[dict[str, Any]]:
+        query = (
+            self._db.collection(INTEGRATIONS_COLLECTION)
+            .where(filter=firestore.FieldFilter("provider", "==", "zendesk"))
+            .where(filter=firestore.FieldFilter("tokens.subdomain", "==", subdomain))
+        )
         results = []
         for doc in query.stream():
             row = doc.to_dict()

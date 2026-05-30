@@ -10,6 +10,7 @@ from app.routers import (
     integrations,
     llm_profiles,
     mcp_servers,
+    self_healing,
     skills,
     workflows,
 )
@@ -35,6 +36,7 @@ app.include_router(agents.router, prefix="/api")
 app.include_router(llm_profiles.router, prefix="/api")
 app.include_router(mcp_servers.router, prefix="/api")
 app.include_router(workflows.router, prefix="/api")
+app.include_router(self_healing.router, prefix="/api")
 
 
 @app.get("/health")

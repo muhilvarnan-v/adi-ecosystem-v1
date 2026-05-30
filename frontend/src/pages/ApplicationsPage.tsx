@@ -30,6 +30,7 @@ import {
   listTrelloCards,
   listZendeskTickets,
 } from '../api/integrations';
+import { listSelfHealingIncidents } from '../api/selfHealing';
 import { ExternalLinkIcon, GitHubIcon, LogsIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type {
   Application,
@@ -42,6 +43,7 @@ import type {
   Goal,
   GoalStatus,
   IntegrationStatus,
+  SelfHealingIncident,
   WorkflowRole,
 } from '../types';
 import { listWorkflows } from '../api/workflows';
@@ -51,6 +53,27 @@ const KANBAN_LANES: { id: GoalStatus; label: string }[] = [
   { id: 'in_progress', label: 'In Progress' },
   { id: 'done', label: 'Done' },
 ];
+
+type ApplicationViewTab = 'dashboard' | 'self_healing';
+type SelfHealingViewTab = 'incidents';
+
+const STANDARD_WORKFLOW_NAME = 'Standard workflow';
+
+function isStandardWorkflow(workflow: WorkflowDefinition): boolean {
+  return workflow.name.trim().toLowerCase() === STANDARD_WORKFLOW_NAME.toLowerCase();
+}
+
+function resolveSelfHealingWorkflow(
+  application: Application,
+  workflowTemplates: WorkflowDefinition[],
+): WorkflowDefinition | undefined {
+  if (application.self_healing_workflow_id) {
+    return workflowTemplates.find((w) => w.id === application.self_healing_workflow_id);
+  }
+  return workflowTemplates.find(isStandardWorkflow) ?? (
+    workflowTemplates.length === 1 ? workflowTemplates[0] : undefined
+  );
+}
 
 function LoadingIndicator() {
   return (
@@ -454,6 +477,182 @@ function JiraImportPanel({
   );
 }
 
+function SelfHealingSection({
+  application,
+  incidents,
+  goals,
+  loadError,
+  integrations,
+  workflowTemplates,
+  saving,
+  autoFixingIncidentId,
+  onSettingsChange,
+  onAutoFix,
+}: {
+  application: Application;
+  incidents: SelfHealingIncident[];
+  goals: Goal[];
+  loadError: string | null;
+  integrations: IntegrationStatus[];
+  workflowTemplates: WorkflowDefinition[];
+  saving: boolean;
+  autoFixingIncidentId: string | null;
+  onSettingsChange: (
+    applicationId: string,
+    updates: {
+      self_healing_enabled?: boolean;
+    },
+  ) => void;
+  onAutoFix: (application: Application, incident: SelfHealingIncident) => void;
+}) {
+  const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
+  const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
+  const selectedWorkflow = resolveSelfHealingWorkflow(application, workflowTemplates);
+  const pipelineSteps = (selectedWorkflow?.steps as WorkflowRole[] | undefined) ?? [];
+  const effective = effectiveGoalWorkflowRoles(
+    { ...(selectedWorkflow?.workflow_roles ?? {}) },
+    application,
+    pipelineSteps,
+  );
+  const missingWorkflow = !selectedWorkflow;
+  const unknownWorkflow = !!application.self_healing_workflow_id && !selectedWorkflow;
+  const missingDevelop = !!selectedWorkflow && !effective.develop;
+  const missingDeploy = !!selectedWorkflow && pipelineSteps.includes('deploy') && !effective.deploy;
+  const autoFixDisabled =
+    !zendeskConnected ||
+    !githubConnected ||
+    !application.github_repo_url ||
+    missingWorkflow ||
+    unknownWorkflow ||
+    missingDevelop ||
+    missingDeploy;
+  const [activeViewTab, setActiveViewTab] = useState<SelfHealingViewTab>('incidents');
+  const viewTabs: { id: SelfHealingViewTab; label: string; count: number }[] = [
+    { id: 'incidents', label: 'Incidents', count: incidents.length },
+  ];
+  const autoFixUnavailableReason =
+    !zendeskConnected
+      ? 'Connect Zendesk to load incidents.'
+      : !githubConnected
+        ? 'Connect GitHub before auto-fix can open PRs.'
+        : !application.github_repo_url
+          ? 'Link a GitHub repository before auto-fix can run.'
+          : unknownWorkflow
+            ? 'The configured self-healing workflow no longer exists.'
+            : missingWorkflow
+              ? 'Create the standard workflow or keep only one saved workflow.'
+              : missingDevelop
+                ? 'The workflow must include a Development agent.'
+                : missingDeploy
+                  ? 'The workflow must include a Deployment agent.'
+                  : undefined;
+
+  function incidentGoal(incident: SelfHealingIncident): Goal | undefined {
+    if (incident.goal_id) {
+      return goals.find((g) => g.id === incident.goal_id);
+    }
+    const externalId = incident.key ?? `#${incident.id}`;
+    return goals.find(
+      (g) =>
+        g.application_id === application.id &&
+        g.source === 'zendesk' &&
+        g.external_id === externalId,
+    );
+  }
+
+  return (
+    <section className="self-healing-section" aria-label={`Self-healing for ${application.title}`}>
+      {loadError && <p className="alert alert-error">{loadError}</p>}
+
+      <div className="self-healing-simple-header">
+        <p className="muted small">
+          {application.self_healing_enabled
+            ? 'New matching incidents will trigger the standard workflow automatically.'
+            : 'New incidents will wait here until you choose Auto fix.'}
+        </p>
+        <button
+          type="button"
+          className={
+            application.self_healing_enabled
+              ? 'btn btn-primary btn-sm self-healing-auto-toggle is-active'
+              : 'btn btn-secondary btn-sm self-healing-auto-toggle'
+          }
+          disabled={saving}
+          aria-pressed={application.self_healing_enabled}
+          onClick={() =>
+            onSettingsChange(application.id, {
+              self_healing_enabled: !application.self_healing_enabled,
+            })
+          }
+        >
+          <span className="self-healing-auto-toggle-track" aria-hidden="true">
+            <span className="self-healing-auto-toggle-knob" />
+          </span>
+          <span>Auto fix</span>
+          <span className="self-healing-auto-toggle-state">
+            {application.self_healing_enabled ? 'On' : 'Off'}
+          </span>
+        </button>
+      </div>
+
+      <div className="self-healing-layout">
+        <div className="self-healing-section-tabs" role="tablist" aria-orientation="vertical">
+          {viewTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeViewTab === tab.id}
+              className={activeViewTab === tab.id ? 'self-healing-section-tab is-active' : 'self-healing-section-tab'}
+              onClick={() => setActiveViewTab(tab.id)}
+            >
+              <span>{tab.label}</span>
+              <span className="card-count">{tab.count}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="self-healing-section-panel">
+          {activeViewTab === 'incidents' && (
+            <div className="self-healing-incidents" role="tabpanel">
+              {incidents.length === 0 ? (
+                <p className="muted small self-healing-empty">No matching incidents found.</p>
+              ) : (
+                <div className="import-list self-healing-incident-list">
+                  {incidents.map((incident) => {
+                    const goal = incidentGoal(incident);
+                    const isFixing = autoFixingIncidentId === incident.id;
+                    return (
+                      <div key={incident.id} className="import-item self-healing-incident">
+                        <div className="import-item-content">
+                          <div className="self-healing-incident-title">
+                            <strong>{incident.key ?? `#${incident.id}`}</strong> — {incident.title}
+                          </div>
+                        </div>
+                        <div className="self-healing-incident-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            disabled={autoFixDisabled || isFixing || !!goal}
+                            title={autoFixDisabled ? autoFixUnavailableReason : undefined}
+                            onClick={() => onAutoFix(application, incident)}
+                          >
+                            {isFixing ? 'Starting…' : goal ? 'Fix started' : 'Auto fix'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ApplicationKanban({
   application,
   goals,
@@ -566,22 +765,15 @@ function ApplicationKanban({
     setSelectedWorkflowId('');
   }
 
-  useEffect(() => {
-    if (!showCreateModal) return;
-    setSelectedWorkflowId((prev) => {
-      const ids = new Set(workflowTemplates.map((w) => w.id));
-      if (prev && ids.has(prev)) return prev;
-      return workflowTemplates[0]?.id ?? '';
-    });
-  }, [showCreateModal, application.id, workflowTemplates]);
-
+  const selectedWorkflowTemplate =
+    workflowTemplates.find((w) => w.id === selectedWorkflowId) ?? workflowTemplates[0];
+  const activeWorkflowId = selectedWorkflowTemplate?.id ?? '';
   const goalPipelineSteps: WorkflowRole[] =
-    (workflowTemplates.find((w) => w.id === selectedWorkflowId)?.steps as WorkflowRole[] | undefined) ?? [];
+    (selectedWorkflowTemplate?.steps as WorkflowRole[] | undefined) ?? [];
 
   function buildEffectiveWorkflowRolesForGoal(): WorkflowRoles {
-    const tmpl = selectedWorkflowId ? workflowTemplates.find((w) => w.id === selectedWorkflowId) : undefined;
     return effectiveGoalWorkflowRoles(
-      { ...(tmpl?.workflow_roles ?? {}) },
+      { ...(selectedWorkflowTemplate?.workflow_roles ?? {}) },
       application,
       goalPipelineSteps,
     );
@@ -594,7 +786,7 @@ function ApplicationKanban({
       onError('Link a GitHub repository to this application before creating a goal.');
       return;
     }
-    if (!selectedWorkflowId.trim()) {
+    if (!activeWorkflowId) {
       onError('Select a workflow. Create one under Workflows if you have not yet.');
       return;
     }
@@ -619,7 +811,7 @@ function ApplicationKanban({
         title.trim(),
         description.trim(),
         effective,
-        { workflow_id: selectedWorkflowId },
+        { workflow_id: activeWorkflowId },
       );
       onGoalsChange((prev) => [created, ...prev]);
       closeCreateModal();
@@ -632,7 +824,7 @@ function ApplicationKanban({
   }
 
   async function handleImportFromJira(issueKey: string) {
-    if (!selectedWorkflowId.trim()) {
+    if (!activeWorkflowId) {
       onError('Select a workflow before importing from Jira.');
       return;
     }
@@ -655,7 +847,7 @@ function ApplicationKanban({
         applicationId,
         issueKey,
         effective,
-        { workflow_id: selectedWorkflowId },
+        { workflow_id: activeWorkflowId },
       );
       onGoalsChange((prev) => [created, ...prev]);
       closeCreateModal();
@@ -668,7 +860,7 @@ function ApplicationKanban({
   }
 
   async function handleImportFromTrello(cardId: string) {
-    if (!selectedWorkflowId.trim()) {
+    if (!activeWorkflowId) {
       onError('Select a workflow before importing from Trello.');
       return;
     }
@@ -691,7 +883,7 @@ function ApplicationKanban({
         applicationId,
         cardId,
         effective,
-        { workflow_id: selectedWorkflowId },
+        { workflow_id: activeWorkflowId },
       );
       onGoalsChange((prev) => [created, ...prev]);
       closeCreateModal();
@@ -704,7 +896,7 @@ function ApplicationKanban({
   }
 
   async function handleImportFromZendesk(ticketId: string) {
-    if (!selectedWorkflowId.trim()) {
+    if (!activeWorkflowId) {
       onError('Select a workflow before importing from Zendesk.');
       return;
     }
@@ -727,7 +919,7 @@ function ApplicationKanban({
         applicationId,
         ticketId,
         effective,
-        { workflow_id: selectedWorkflowId },
+        { workflow_id: activeWorkflowId },
       );
       onGoalsChange((prev) => [created, ...prev]);
       closeCreateModal();
@@ -923,7 +1115,7 @@ function ApplicationKanban({
               Workflow
               <select
                 required
-                value={selectedWorkflowId}
+                value={activeWorkflowId}
                 onChange={(e) => {
                   setSelectedWorkflowId(e.target.value);
                 }}
@@ -978,7 +1170,7 @@ function ApplicationKanban({
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={submitting || !githubRepoLinked || !selectedWorkflowId.trim()}
+                disabled={submitting || !githubRepoLinked || !activeWorkflowId}
               >
                 <PlusIcon />
                 {submitting ? 'Starting agent…' : 'Create & run goal'}
@@ -993,7 +1185,7 @@ function ApplicationKanban({
             spaces={jiraSpaces}
             loadError={jiraLoadError ?? null}
             submitting={submitting}
-            importDisabled={!selectedWorkflowId.trim()}
+            importDisabled={!activeWorkflowId}
             onImport={handleImportFromJira}
           />
         )}
@@ -1012,7 +1204,7 @@ function ApplicationKanban({
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
-                    disabled={submitting || !selectedWorkflowId.trim()}
+                    disabled={submitting || !activeWorkflowId}
                     onClick={() => handleImportFromTrello(card.id)}
                   >
                     <PlusIcon />
@@ -1030,7 +1222,7 @@ function ApplicationKanban({
             spaces={[]}
             loadError={zendeskLoadError ?? null}
             submitting={submitting}
-            importDisabled={!selectedWorkflowId.trim()}
+            importDisabled={!activeWorkflowId}
             onImport={handleImportFromZendesk}
             emptyMessage="No Zendesk tickets found."
             searchPlaceholder="Search by ticket #, title, or status…"
@@ -1123,16 +1315,22 @@ export function ApplicationsPage() {
   const [trelloCards, setTrelloCards] = useState<ExternalCard[]>([]);
   const [zendeskTickets, setZendeskTickets] = useState<ExternalIssue[]>([]);
   const [zendeskLoadError, setZendeskLoadError] = useState<string | null>(null);
+  const [selfHealingIncidents, setSelfHealingIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
+  const [selfHealingLoadErrors, setSelfHealingLoadErrors] = useState<Record<string, string | null>>({});
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savingRepoFor, setSavingRepoFor] = useState<string | null>(null);
+  const [savingSelfHealingFor, setSavingSelfHealingFor] = useState<string | null>(null);
+  const [autoFixingIncident, setAutoFixingIncident] = useState<string | null>(null);
+  const [applicationViewTabs, setApplicationViewTabs] = useState<Record<string, ApplicationViewTab>>({});
   const [showAppModal, setShowAppModal] = useState(false);
   const [editingApplicationId, setEditingApplicationId] = useState<string | null>(null);
   const [appTitle, setAppTitle] = useState('');
   const [appDescription, setAppDescription] = useState('');
   const [appRepoUrl, setAppRepoUrl] = useState('');
+  const [appSelfHealingWorkflowId, setAppSelfHealingWorkflowId] = useState('');
 
   const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
 
@@ -1213,9 +1411,31 @@ export function ApplicationsPage() {
           setZendeskTickets([]);
           setZendeskLoadError(e instanceof Error ? e.message : 'Failed to load Zendesk tickets');
         }
+        const incidentEntries = await Promise.all(
+          appsData.map(async (app) => {
+            try {
+              const incidents = await listSelfHealingIncidents(app.id);
+              return [app.id, incidents, null] as const;
+            } catch (e) {
+              return [
+                app.id,
+                [] as SelfHealingIncident[],
+                e instanceof Error ? e.message : 'Failed to load self-healing incidents',
+              ] as const;
+            }
+          }),
+        );
+        setSelfHealingIncidents(
+          Object.fromEntries(incidentEntries.map(([appId, incidents]) => [appId, incidents])),
+        );
+        setSelfHealingLoadErrors(
+          Object.fromEntries(incidentEntries.map(([appId, , loadError]) => [appId, loadError])),
+        );
       } else {
         setZendeskTickets([]);
         setZendeskLoadError(null);
+        setSelfHealingIncidents({});
+        setSelfHealingLoadErrors({});
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load applications');
@@ -1243,6 +1463,7 @@ export function ApplicationsPage() {
     setAppTitle('');
     setAppDescription('');
     setAppRepoUrl('');
+    setAppSelfHealingWorkflowId('');
   }
 
   function openEditApplication(app: Application) {
@@ -1250,6 +1471,7 @@ export function ApplicationsPage() {
     setAppTitle(app.title);
     setAppDescription(app.description ?? '');
     setAppRepoUrl(app.github_repo_url ?? '');
+    setAppSelfHealingWorkflowId(app.self_healing_workflow_id ?? '');
     setShowAppModal(true);
   }
 
@@ -1268,6 +1490,88 @@ export function ApplicationsPage() {
     }
   }
 
+  async function refreshSelfHealingIncidents(applicationId: string) {
+    setSelfHealingLoadErrors((prev) => ({ ...prev, [applicationId]: null }));
+    try {
+      const incidents = await listSelfHealingIncidents(applicationId);
+      setSelfHealingIncidents((prev) => ({ ...prev, [applicationId]: incidents }));
+    } catch (e) {
+      setSelfHealingIncidents((prev) => ({ ...prev, [applicationId]: [] }));
+      setSelfHealingLoadErrors((prev) => ({
+        ...prev,
+        [applicationId]: e instanceof Error ? e.message : 'Failed to load self-healing incidents',
+      }));
+    }
+  }
+
+  async function handleSelfHealingSettingsChange(
+    applicationId: string,
+    updates: {
+      self_healing_enabled?: boolean;
+    },
+  ) {
+    setSavingSelfHealingFor(applicationId);
+    setError(null);
+    try {
+      const updated = await updateApplication(applicationId, updates);
+      setApplications((prev) => prev.map((a) => (a.id === applicationId ? updated : a)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update self-healing settings');
+    } finally {
+      setSavingSelfHealingFor(null);
+    }
+  }
+
+  async function handleSelfHealingAutoFix(application: Application, incident: SelfHealingIncident) {
+    const configuredWorkflowId = application.self_healing_workflow_id?.trim();
+    const workflow = resolveSelfHealingWorkflow(application, workflowTemplates);
+    if (!workflow) {
+      setError(
+        configuredWorkflowId
+          ? 'The configured self-healing workflow no longer exists.'
+          : 'Create the standard workflow or keep only one saved workflow.',
+      );
+      return;
+    }
+    if (!application.github_repo_url) {
+      setError('Link a GitHub repository to this application before starting auto-fix.');
+      return;
+    }
+    const steps = (workflow?.steps as WorkflowRole[] | undefined) ?? [];
+    const effective = effectiveGoalWorkflowRoles(
+      { ...(workflow?.workflow_roles ?? {}) },
+      application,
+      steps,
+    );
+    if (!effective.develop) {
+      setError('The standard workflow must supply a Development agent before auto-fix can run.');
+      return;
+    }
+    if (steps.includes('deploy') && !effective.deploy) {
+      setError('The standard workflow must supply a Deployment agent before auto-fix can run.');
+      return;
+    }
+
+    const key = `${application.id}:${incident.id}`;
+    setAutoFixingIncident(key);
+    setError(null);
+    try {
+      const created = await createGoalFromZendesk(
+        application.id,
+        incident.id,
+        effective,
+        { workflow_id: workflow.id },
+      );
+      setGoals((prev) => [created, ...prev.filter((g) => g.id !== created.id)]);
+      setExecutingGoal(created);
+      await refreshSelfHealingIncidents(application.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to start auto-fix');
+    } finally {
+      setAutoFixingIncident(null);
+    }
+  }
+
   async function handleAppSubmit(e: FormEvent) {
     e.preventDefault();
     if (!appTitle.trim()) return;
@@ -1279,6 +1583,7 @@ export function ApplicationsPage() {
           title: appTitle.trim(),
           description: appDescription.trim(),
           github_repo_url: appRepoUrl || null,
+          self_healing_workflow_id: appSelfHealingWorkflowId || null,
         });
         setApplications((prev) => prev.map((a) => (a.id === editingApplicationId ? updated : a)));
       } else {
@@ -1286,6 +1591,7 @@ export function ApplicationsPage() {
           appTitle.trim(),
           appDescription.trim(),
           appRepoUrl || null,
+          { self_healing_workflow_id: appSelfHealingWorkflowId || null },
         );
         setApplications((prev) => [created, ...prev]);
       }
@@ -1314,7 +1620,15 @@ export function ApplicationsPage() {
     return goals.filter((g) => g.application_id === applicationId).length;
   }
 
+  function setApplicationViewTab(applicationId: string, tab: ApplicationViewTab) {
+    setApplicationViewTabs((prev) => ({ ...prev, [applicationId]: tab }));
+  }
+
   const unassignedGoals = goals.filter((g) => !g.application_id);
+  const automaticSelfHealingWorkflow =
+    workflowTemplates.find(isStandardWorkflow) ?? (
+      workflowTemplates.length === 1 ? workflowTemplates[0] : null
+    );
 
   const appModal = showAppModal && (
     <div className="modal-overlay" role="presentation" onClick={closeAppModal}>
@@ -1360,6 +1674,31 @@ export function ApplicationsPage() {
             onChange={setAppRepoUrl}
             reposLoadError={reposLoadError}
           />
+          <fieldset className="fieldset app-self-healing-settings">
+            <legend>Self-healing</legend>
+            {workflowTemplates.length > 0 ? (
+              <label>
+                Auto-fix workflow
+                <select
+                  value={appSelfHealingWorkflowId}
+                  onChange={(e) => setAppSelfHealingWorkflowId(e.target.value)}
+                >
+                  <option value="">
+                    Automatic {automaticSelfHealingWorkflow ? `(${automaticSelfHealingWorkflow.name})` : ''}
+                  </option>
+                  {workflowTemplates.map((wf) => (
+                    <option key={wf.id} value={wf.id}>
+                      {wf.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="muted small">
+                Create a workflow under <Link to="/workflows">Workflows</Link> before auto-fix can run.
+              </p>
+            )}
+          </fieldset>
           <div className="modal-actions">
             <button type="button" className="btn btn-secondary" onClick={closeAppModal}>
               Cancel
@@ -1416,58 +1755,108 @@ export function ApplicationsPage() {
         </section>
       ) : (
         <div className="applications-list">
-          {applications.map((app) => (
-            <section key={app.id} className="card application-section">
-              <div className="application-section-header">
-                <div className="application-section-info">
-                  <h2>{app.title}</h2>
-                  {app.description && <p className="application-section-desc">{app.description}</p>}
-                  <ApplicationRepoBar
-                    app={app}
-                    githubConnected={!!githubConnected}
-                    githubRepos={githubRepos}
-                    saving={savingRepoFor === app.id}
-                    onRepoChange={(url) => handleRepoChange(app.id, url)}
+          {applications.map((app) => {
+            const activeViewTab = applicationViewTabs[app.id] ?? 'dashboard';
+            const appIncidents = selfHealingIncidents[app.id] ?? [];
+            return (
+              <section key={app.id} className="card application-section">
+                <div className="application-section-header">
+                  <div className="application-section-info">
+                    <h2>{app.title}</h2>
+                    {app.description && <p className="application-section-desc">{app.description}</p>}
+                    <ApplicationRepoBar
+                      app={app}
+                      githubConnected={!!githubConnected}
+                      githubRepos={githubRepos}
+                      saving={savingRepoFor === app.id}
+                      onRepoChange={(url) => handleRepoChange(app.id, url)}
+                    />
+                  </div>
+                  <div className="application-section-actions">
+                    <span className="card-count">{goalCountForApp(app.id)} goals</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => openEditApplication(app)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => handleDeleteApplication(app.id, app.title)}
+                    >
+                      <TrashIcon />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                <div className="application-window-tabs" role="tablist" aria-label={`${app.title} sections`}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeViewTab === 'dashboard'}
+                    className={activeViewTab === 'dashboard' ? 'application-window-tab is-active' : 'application-window-tab'}
+                    onClick={() => setApplicationViewTab(app.id, 'dashboard')}
+                  >
+                    Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeViewTab === 'self_healing'}
+                    className={activeViewTab === 'self_healing' ? 'application-window-tab is-active' : 'application-window-tab'}
+                    onClick={() => setApplicationViewTab(app.id, 'self_healing')}
+                  >
+                    <span>Self-healing</span>
+                    <span className="card-count">{appIncidents.length}</span>
+                  </button>
+                </div>
+
+                {activeViewTab === 'self_healing' ? (
+                  <SelfHealingSection
+                    application={app}
+                    incidents={appIncidents}
+                    goals={goals}
+                    loadError={selfHealingLoadErrors[app.id] ?? null}
+                    integrations={integrations}
+                    workflowTemplates={workflowTemplates}
+                    saving={savingSelfHealingFor === app.id}
+                    autoFixingIncidentId={
+                      autoFixingIncident?.startsWith(`${app.id}:`)
+                        ? autoFixingIncident.slice(app.id.length + 1)
+                        : null
+                    }
+                    onSettingsChange={(applicationId, updates) => {
+                      void handleSelfHealingSettingsChange(applicationId, updates);
+                    }}
+                    onAutoFix={(application, incident) => {
+                      void handleSelfHealingAutoFix(application, incident);
+                    }}
                   />
-                </div>
-                <div className="application-section-actions">
-                  <span className="card-count">{goalCountForApp(app.id)} goals</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => openEditApplication(app)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={() => handleDeleteApplication(app.id, app.title)}
-                  >
-                    <TrashIcon />
-                    Delete
-                  </button>
-                </div>
-              </div>
-              <ApplicationKanban
-                application={app}
-                goals={goals}
-                onGoalsChange={setGoals}
-                onError={setError}
-                onGoalExecuting={setExecutingGoal}
-                integrations={integrations}
-                githubRepoLinked={!!app.github_repo_url}
-                jiraIssues={jiraIssues}
-                jiraSpaces={jiraSpaces}
-                jiraLoadError={jiraLoadError}
-                trelloCards={trelloCards}
-                zendeskTickets={zendeskTickets}
-                zendeskLoadError={zendeskLoadError}
-                workflowTemplates={workflowTemplates}
-                onRefreshWorkflowTemplates={refreshWorkflowTemplates}
-              />
-            </section>
-          ))}
+                ) : (
+                  <ApplicationKanban
+                    application={app}
+                    goals={goals}
+                    onGoalsChange={setGoals}
+                    onError={setError}
+                    onGoalExecuting={setExecutingGoal}
+                    integrations={integrations}
+                    githubRepoLinked={!!app.github_repo_url}
+                    jiraIssues={jiraIssues}
+                    jiraSpaces={jiraSpaces}
+                    jiraLoadError={jiraLoadError}
+                    trelloCards={trelloCards}
+                    zendeskTickets={zendeskTickets}
+                    zendeskLoadError={zendeskLoadError}
+                    workflowTemplates={workflowTemplates}
+                    onRefreshWorkflowTemplates={refreshWorkflowTemplates}
+                  />
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
 
@@ -1491,6 +1880,8 @@ export function ApplicationsPage() {
               github_repo_url: null,
               workflow_roles: {},
               workflow_max_cycles: 3,
+              self_healing_enabled: false,
+              self_healing_workflow_id: null,
               created_at: '',
               updated_at: '',
             }}

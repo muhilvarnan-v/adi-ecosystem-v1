@@ -792,6 +792,193 @@ textarea {
   padding: 1rem 1.25rem 1.25rem;
 }
 
+.application-window-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 1rem 1.25rem 0;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(21, 19, 20, 0.04);
+}
+
+.application-window-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.85rem;
+  border: none;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
+}
+
+.application-window-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.application-window-tab.is-active {
+  background: #ffffff;
+  color: var(--primary);
+  box-shadow: 0 1px 4px rgba(21, 19, 20, 0.08);
+}
+
+.self-healing-section {
+  margin: 1rem 1.25rem 1.25rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0, 61, 71, 0.035);
+}
+
+.self-healing-simple-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.self-healing-simple-header p {
+  margin: 0;
+}
+
+.self-healing-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+  min-width: 8.25rem;
+  padding-inline: 0.65rem 0.75rem;
+}
+
+.self-healing-auto-toggle.is-active {
+  box-shadow: 0 2px 12px var(--primary-glow);
+}
+
+.self-healing-auto-toggle-track {
+  width: 32px;
+  height: 18px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(21, 19, 20, 0.18);
+  transition: background var(--transition);
+}
+
+.self-healing-auto-toggle-knob {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(21, 19, 20, 0.2);
+  transition: transform var(--transition);
+}
+
+.self-healing-auto-toggle.is-active .self-healing-auto-toggle-track {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.self-healing-auto-toggle.is-active .self-healing-auto-toggle-knob {
+  transform: translateX(14px);
+}
+
+.self-healing-auto-toggle-state {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
+
+.self-healing-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-top: 0;
+}
+
+.self-healing-section-tabs {
+  display: flex;
+  flex: 0 0 170px;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.self-healing-section-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.self-healing-section-tab:hover {
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--text);
+}
+
+.self-healing-section-tab.is-active {
+  border-color: rgba(0, 61, 71, 0.18);
+  background: #ffffff;
+  color: var(--primary);
+  box-shadow: 0 1px 4px rgba(21, 19, 20, 0.06);
+}
+
+.self-healing-section-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.self-healing-incidents {
+  margin-top: 0;
+}
+
+.self-healing-empty {
+  margin: 0.65rem 0 0;
+}
+
+.self-healing-incident-list {
+  gap: 0.55rem;
+}
+
+.self-healing-incident {
+  align-items: flex-start;
+}
+
+.self-healing-incident-title {
+  line-height: 1.4;
+}
+
+.self-healing-incident-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
 .application-section-unassigned {
   border-style: dashed;
 }
@@ -3290,6 +3477,27 @@ textarea {
 
   .kanban-board {
     grid-template-columns: 1fr;
+  }
+
+  .application-window-tabs {
+    flex-wrap: wrap;
+  }
+
+  .self-healing-layout {
+    flex-direction: column;
+  }
+
+  .self-healing-section-tabs {
+    width: 100%;
+    flex: none;
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+  }
+
+  .self-healing-section-tab {
+    flex: 0 0 auto;
+    min-width: 9rem;
   }
 
   .harness-layout {

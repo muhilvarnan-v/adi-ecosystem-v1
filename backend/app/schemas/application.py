@@ -61,6 +61,8 @@ class ApplicationCreate(BaseModel):
     github_repo_url: HttpUrl | None = None
     workflow_roles: dict[str, str] = Field(default_factory=dict)
     workflow_max_cycles: int = Field(default=3, ge=1, le=10)
+    self_healing_enabled: bool = False
+    self_healing_workflow_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("workflow_roles", mode="before")
     @classmethod
@@ -71,6 +73,14 @@ class ApplicationCreate(BaseModel):
             return {}
         return _normalize_workflow_roles(v)
 
+    @field_validator("self_healing_workflow_id", mode="before")
+    @classmethod
+    def normalize_self_healing_workflow_id(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
 
 class ApplicationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=500)
@@ -78,6 +88,8 @@ class ApplicationUpdate(BaseModel):
     github_repo_url: HttpUrl | None = None
     workflow_roles: dict[str, str] | None = None
     workflow_max_cycles: int | None = Field(default=None, ge=1, le=10)
+    self_healing_enabled: bool | None = None
+    self_healing_workflow_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("workflow_roles", mode="before")
     @classmethod
@@ -88,6 +100,14 @@ class ApplicationUpdate(BaseModel):
             return {}
         return _normalize_workflow_roles(v)
 
+    @field_validator("self_healing_workflow_id", mode="before")
+    @classmethod
+    def normalize_self_healing_workflow_id(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
 
 class ApplicationResponse(BaseModel):
     id: str
@@ -97,5 +117,7 @@ class ApplicationResponse(BaseModel):
     github_repo_url: str | None = None
     workflow_roles: dict[str, str] = Field(default_factory=dict)
     workflow_max_cycles: int = 3
+    self_healing_enabled: bool = False
+    self_healing_workflow_id: str | None = None
     created_at: datetime
     updated_at: datetime

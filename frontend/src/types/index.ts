@@ -20,6 +20,8 @@ export interface Application {
   github_repo_url: string | null;
   workflow_roles: WorkflowRoles;
   workflow_max_cycles: number;
+  self_healing_enabled: boolean;
+  self_healing_workflow_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -118,6 +120,20 @@ export interface ExternalCard {
   description: string;
   url: string | null;
   board_name: string | null;
+}
+
+export interface SelfHealingIncident {
+  id: string;
+  key: string | null;
+  title: string;
+  description: string;
+  url: string | null;
+  status: string | null;
+  priority: string | null;
+  goal_id: string | null;
+  goal_status: GoalStatus | null;
+  execution_status: GoalExecutionStatus | null;
+  pr_url: string | null;
 }
 
 export type SkillSource = 'manual' | 'github';

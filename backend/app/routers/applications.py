@@ -20,6 +20,8 @@ def _to_response(row: dict) -> ApplicationResponse:
         github_repo_url=row.get("github_repo_url"),
         workflow_roles=row.get("workflow_roles") or {},
         workflow_max_cycles=int(row.get("workflow_max_cycles") or 3),
+        self_healing_enabled=bool(row.get("self_healing_enabled")),
+        self_healing_workflow_id=row.get("self_healing_workflow_id"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -56,6 +58,8 @@ def create_application(body: ApplicationCreate, user_id: str = Depends(get_user_
         github_repo_url=_github_repo_url_str(body.github_repo_url),
         workflow_roles=body.workflow_roles,
         workflow_max_cycles=body.workflow_max_cycles,
+        self_healing_enabled=body.self_healing_enabled,
+        self_healing_workflow_id=body.self_healing_workflow_id,
     )
     return _to_response(row)
 
