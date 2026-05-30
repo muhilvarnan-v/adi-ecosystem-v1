@@ -622,23 +622,69 @@ function SelfHealingSection({
                   {incidents.map((incident) => {
                     const goal = incidentGoal(incident);
                     const isFixing = autoFixingIncidentId === incident.id;
+                    const execStatus = goal?.execution_status ?? incident.execution_status;
+                    const prUrl = goal?.pr_url ?? incident.pr_url;
+                    const ticketStatus = (incident.status ?? '').toLowerCase();
+                    const ticketResolved = ['solved', 'closed'].includes(ticketStatus);
+                    const isRunning = execStatus === 'queued' || execStatus === 'running';
+                    const isCompleted = execStatus === 'completed';
+                    const isFailed = execStatus === 'failed';
+
+                    let fixState: 'running' | 'fixed' | 'created' | 'failed' | 'idle';
+                    if (isRunning) fixState = 'running';
+                    else if (isCompleted && ticketResolved) fixState = 'fixed';
+                    else if (isCompleted) fixState = 'created';
+                    else if (isFailed) fixState = 'failed';
+                    else fixState = 'idle';
+
                     return (
                       <div key={incident.id} className="import-item self-healing-incident">
                         <div className="import-item-content">
                           <div className="self-healing-incident-title">
-                            <strong>{incident.key ?? `#${incident.id}`}</strong> — {incident.title}
+                            <strong>{incident.key ?? `#${incident.id}`}</strong>
+                            <span>{incident.title}</span>
                           </div>
+                          {incident.status && (
+                            <span className={`badge incident-ticket-badge badge-status-${ticketStatus || 'unknown'}`}>
+                              {incident.status}
+                            </span>
+                          )}
                         </div>
                         <div className="self-healing-incident-actions">
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            disabled={autoFixDisabled || isFixing || !!goal}
-                            title={autoFixDisabled ? autoFixUnavailableReason : undefined}
-                            onClick={() => onAutoFix(application, incident)}
-                          >
-                            {isFixing ? 'Starting…' : goal ? 'Fix started' : 'Auto fix'}
-                          </button>
+                          {prUrl && (
+                            <a
+                              href={prUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost btn-sm self-healing-pr-link"
+                            >
+                              <ExternalLinkIcon />
+                              View PR
+                            </a>
+                          )}
+                          {fixState === 'running' && (
+                            <span className="status-pill status-pill-running">
+                              <span className="status-dot" />
+                              Fixing…
+                            </span>
+                          )}
+                          {fixState === 'fixed' && (
+                            <span className="status-pill status-pill-fixed">Fixed</span>
+                          )}
+                          {fixState === 'created' && (
+                            <span className="status-pill status-pill-created">Fix created</span>
+                          )}
+                          {(fixState === 'idle' || fixState === 'failed') && (
+                            <button
+                              type="button"
+                              className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+                              disabled={autoFixDisabled || isFixing}
+                              title={autoFixDisabled ? autoFixUnavailableReason : undefined}
+                              onClick={() => onAutoFix(application, incident)}
+                            >
+                              {isFixing ? 'Starting…' : fixState === 'failed' ? 'Retry fix' : 'Fix'}
+                            </button>
+                          )}
                         </div>
                       </div>
                     );

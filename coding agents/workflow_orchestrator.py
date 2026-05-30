@@ -8,6 +8,7 @@ Aligns with OpenHands SDK: each phase is a Conversation run with its own Agent
 from __future__ import annotations
 
 import json
+import subprocess
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -61,6 +62,7 @@ class PhaseOutcome:
     status: str
     summary: str | None = None
     feedback: str | None = None
+    pr_url: str | None = None
 
 
 EmitWorkflow = Callable[[dict[str, Any]], None]
@@ -90,6 +92,83 @@ def parse_phase_result(path: Path) -> tuple[str, str | None, str | None]:
     if status not in ("passed", "failed"):
         status = "failed"
     return status, summary, feedback
+
+
+def _ensure_pull_request(
+    repo_dir: Path,
+    base_branch: str,
+    feature_branch: str,
+    goal: str,
+) -> str | None:
+    """Deterministically open (or find) a PR for the pushed feature branch via gh.
+
+    Used as a fallback when the deploy agent pushed the branch but did not record
+    a PR url. Returns the PR url, or None if it could not be created/found.
+    """
+
+    def _gh(args: list[str]) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(
+                ["gh", *args],
+                cwd=str(repo_dir),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            return None
+
+    # Already open?
+    existing = _gh(["pr", "view", feature_branch, "--json", "url", "-q", ".url"])
+    if existing and existing.returncode == 0 and existing.stdout.strip():
+        return existing.stdout.strip()
+
+    title = (goal.strip().splitlines() or ["Automated fix"])[0][:120] or "Automated fix"
+    created = _gh(
+        [
+            "pr",
+            "create",
+            "--base",
+            base_branch,
+            "--head",
+            feature_branch,
+            "--title",
+            title,
+            "--body",
+            "Automated change opened by the ADI agent workflow.\n\n" + goal.strip(),
+        ]
+    )
+    if created and created.returncode == 0 and created.stdout.strip():
+        # gh prints the PR url as the last line
+        for line in reversed(created.stdout.strip().splitlines()):
+            if line.startswith("http"):
+                return line.strip()
+    # Re-query in case it was created but stdout was unexpected
+    again = _gh(["pr", "view", feature_branch, "--json", "url", "-q", ".url"])
+    if again and again.returncode == 0 and again.stdout.strip():
+        return again.stdout.strip()
+    return None
+
+
+def _has_committed_changes(repo_dir: Path, base_branch: str, feature_branch: str) -> bool:
+    """True if the feature branch has committed changes vs base (excluding agent state files)."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_dir), "diff", "--name-only", f"{base_branch}...{feature_branch}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return True  # fail open: don't block on a git error
+    if out.returncode != 0:
+        return True
+    changed = [
+        line.strip()
+        for line in out.stdout.splitlines()
+        if line.strip() and not line.strip().startswith(".openhands")
+    ]
+    return len(changed) > 0
 
 
 def _phase_prompt(
@@ -259,6 +338,15 @@ def run_phase(
 
     if phase == WorkflowPhase.DEPLOY:
         status, pr_url, summary = parse_result_file(repo_dir / ".openhands_result.json")
+        # Deterministic fallback: the agent may push the branch but skip writing the
+        # result file or opening the PR. If we still have no PR url, open/find it via gh.
+        if not pr_url and _has_committed_changes(repo_dir, base_branch, feature_branch):
+            fallback_url = _ensure_pull_request(repo_dir, base_branch, feature_branch, goal)
+            if fallback_url:
+                pr_url = fallback_url
+                status = "finished"
+                summary = summary or "Pull request opened by deploy fallback."
+                _emit_log(on_log, f"Deploy fallback opened/located PR: {pr_url}")
         phase_status = "passed" if status == "finished" and pr_url else "failed"
         outcome = PhaseOutcome(
             phase=phase,
@@ -266,9 +354,27 @@ def run_phase(
             status=phase_status,
             summary=summary or (f"PR: {pr_url}" if pr_url else None),
             feedback=None if phase_status == "passed" else summary,
+            pr_url=pr_url,
         )
     else:
         phase_status, summary, feedback_text = parse_phase_result(phase_path)
+        # Guard: a "passed" develop phase that produced no committed change vs base
+        # is a false completion (e.g. agent claims the fix already exists). Force a
+        # retry so the workflow does not finish without an actual diff/PR.
+        if (
+            phase == WorkflowPhase.DEVELOP
+            and phase_status == "passed"
+            and not _has_committed_changes(repo_dir, base_branch, feature_branch)
+        ):
+            phase_status = "failed"
+            feedback_text = (
+                "No committed changes were detected on the feature branch versus "
+                f"`{base_branch}`. The goal requires an actual code change. Verify the "
+                "current state in the repository (do not assume it is already done), "
+                "make the required edit, and commit it to "
+                f"`{feature_branch}`."
+            )
+            summary = summary or "No changes produced"
         outcome = PhaseOutcome(
             phase=phase,
             cycle=cycle,
@@ -470,6 +576,11 @@ def run_implementation_workflow(
         graph.add_edge(prev_node_id, "deploy-c0")
 
     status, pr_url, summary = parse_result_file(repo_dir / ".openhands_result.json")
+    # Prefer the PR url resolved during the deploy phase (incl. the gh fallback),
+    # since the agent may not have written .openhands_result.json.
+    if not pr_url and deploy_outcome.pr_url:
+        pr_url = deploy_outcome.pr_url
+        summary = summary or deploy_outcome.summary
     finished = deploy_outcome.status == "passed" and pr_url is not None
 
     _emit_workflow(

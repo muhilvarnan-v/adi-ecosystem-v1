@@ -37,6 +37,12 @@ from openhands_workspace import resolve_openhands_workspace
 # We use the OpenAI-compatible GAP proxy only; suppress optional-provider noise.
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 
+# Disable git's interactive pager. In the agent's non-interactive terminal,
+# commands like `git diff` otherwise launch `less` and block until timeout.
+os.environ["GIT_PAGER"] = "cat"
+os.environ["PAGER"] = "cat"
+os.environ.setdefault("GIT_TERMINAL_PROMPT", "0")
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_MODEL = "openai/ai-ops-gemini-2.5-flash"
 DEFAULT_LLM_BASE_URL = "https://gap-dev.thoughtworks.net/v1"
@@ -315,6 +321,21 @@ def clone_repo(repo_url: str, base_branch: str, target_dir: Path) -> None:
         capture_output=True,
         text=True,
     )
+    # Keep agent bookkeeping files out of the application repo's commits/PRs.
+    # Uses .git/info/exclude (local, never committed) so even `git add -A` skips them.
+    try:
+        exclude = target_dir / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        patterns = [".openhands_result.json", ".openhands_phase_result.json", ".openhands*"]
+        to_add = [p for p in patterns if p not in existing]
+        if to_add:
+            with exclude.open("a", encoding="utf-8") as fh:
+                if existing and not existing.endswith("\n"):
+                    fh.write("\n")
+                fh.write("\n".join(to_add) + "\n")
+    except Exception:
+        pass  # non-fatal; agent prompts are also instructed not to commit these
 
 
 def run_workflow_for_repo(

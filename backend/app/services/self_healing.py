@@ -235,6 +235,11 @@ async def handle_zendesk_webhook(db, payload: dict[str, Any]) -> ZendeskWebhookR
             except Exception:
                 pass
 
+        # Skip tickets that are no longer active (solved/closed/deleted). This prevents
+        # an already-resolved ticket from auto-triggering another goal via the webhook.
+        if not _is_active_incident(ticket):
+            continue
+
         for app in db.list_self_healing_applications(user_id):
             if not _matches_application(app, ticket):
                 continue

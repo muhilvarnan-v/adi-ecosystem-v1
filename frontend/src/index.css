@@ -965,11 +965,49 @@ textarea {
 }
 
 .self-healing-incident {
-  align-items: flex-start;
+  align-items: center;
+}
+
+.self-healing-incident .import-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .self-healing-incident-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
   line-height: 1.4;
+}
+
+.self-healing-incident-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-ticket-badge {
+  align-self: flex-start;
+  background: rgba(21, 19, 20, 0.06);
+  color: var(--muted);
+}
+
+.badge-status-open {
+  background: rgba(0, 95, 204, 0.12);
+  color: #005fcc;
+}
+
+.badge-status-pending,
+.badge-status-hold {
+  background: rgba(214, 158, 46, 0.16);
+  color: #9a6a00;
+}
+
+.badge-status-solved,
+.badge-status-closed {
+  background: rgba(107, 158, 120, 0.2);
+  color: #2f6d3f;
 }
 
 .self-healing-incident-actions {
@@ -977,6 +1015,63 @@ textarea {
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+
+/* Status pills (consistent height with btn-sm) */
+.self-healing-incident-actions .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: none;
+  font-size: 0.78rem;
+  padding: 0.34rem 0.7rem;
+  white-space: nowrap;
+}
+
+.status-pill-running {
+  background: rgba(0, 95, 204, 0.12);
+  color: #005fcc;
+}
+
+.status-pill-created {
+  background: rgba(214, 158, 46, 0.16);
+  color: #9a6a00;
+}
+
+.status-pill-fixed {
+  background: rgba(107, 158, 120, 0.2);
+  color: #2f6d3f;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* Ghost button used for the View PR link */
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--primary);
+}
+
+.btn-ghost:hover {
+  background: rgba(0, 61, 71, 0.06);
+}
+
+.self-healing-pr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-decoration: none;
 }
 
 .application-section-unassigned {
@@ -2296,6 +2391,16 @@ textarea {
 .badge-github {
   background: rgba(99, 79, 125, 0.15);
   color: #634f7d;
+}
+
+.badge-info {
+  background: rgba(0, 95, 204, 0.12);
+  color: #005fcc;
+}
+
+.badge-success {
+  background: rgba(107, 158, 120, 0.2);
+  color: #2f6d3f;
 }
 
 /* Skills list — compact rows */
