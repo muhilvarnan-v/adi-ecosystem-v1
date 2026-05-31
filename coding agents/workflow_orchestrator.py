@@ -16,8 +16,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from agent_log_context import workflow_agent_context
 from agent_session import create_agent_and_conversation
-from run_multi_repo import RepoRunResult, parse_result_file
+from run_multi_repo import (
+    RepoRunResult,
+    compose_structured_log,
+    current_workflow_agent_context,
+    parse_result_file,
+    slim_log_fields,
+)
 
 PHASE_RESULT_FILE = ".openhands_phase_result.json"
 
@@ -66,7 +73,7 @@ class PhaseOutcome:
 
 
 EmitWorkflow = Callable[[dict[str, Any]], None]
-EmitLog = Callable[[str], None]
+EmitLog = Callable[[str, dict[str, Any] | None], None]
 EmitChat = Callable[[dict[str, Any]], None]
 
 
@@ -75,9 +82,17 @@ def _emit_workflow(on_workflow: EmitWorkflow | None, payload: dict[str, Any]) ->
         on_workflow(payload)
 
 
-def _emit_log(on_log: EmitLog | None, line: str) -> None:
-    if on_log:
-        on_log(line)
+def _emit_log(on_log: EmitLog | None, message: str, **kwargs: Any) -> None:
+    """Structured harness log line (agent / phase / event_kind) for UIs and NDJSON."""
+    if not on_log:
+        return
+    kw = dict(kwargs)
+    extra_wf = {k: kw.pop(k) for k in ("agent", "phase", "cycle", "agent_record_id") if k in kw}
+    wf = {**current_workflow_agent_context(), **extra_wf}
+    event_kind = str(kw.pop("event_kind", "orchestrator") or "orchestrator")
+    event_meta: dict[str, Any] = {"event_kind": event_kind, "preview": message, **kw}
+    full, body, merged = compose_structured_log(wf, event_meta)
+    on_log(full, slim_log_fields(merged, body))
 
 
 def _emit_chat(on_chat: EmitChat | None, payload: dict[str, Any]) -> None:
@@ -296,149 +311,164 @@ def run_phase(
             "role": role.role,
         },
     )
-    _emit_log(on_log, f"── {role.display_name} · {phase.value} (cycle {cycle}) ──")
-
-    graph.add_node(
-        node_id,
+    with workflow_agent_context(
+        agent=role.display_name,
         phase=phase.value,
         cycle=cycle,
-        status="running",
-        agent=role.display_name,
-        role=role.role,
-    )
-
-    _, conversation, workspace = create_agent_and_conversation(
-        repo_dir=repo_dir,
-        api_key=api_key,
-        skills=role.skills,
-        openhands_settings=role.openhands_settings,
-        mcp_servers=role.mcp_servers,
-        system_instruction=role.system_instruction,
-        on_log=on_log,
-        openhands_sandbox=openhands_sandbox,
-    )
-
-    phase_path = repo_dir / PHASE_RESULT_FILE
-    if phase_path.exists():
-        phase_path.unlink()
-
-    prompt = _phase_prompt(
-        phase,
-        goal=goal,
-        base_branch=base_branch,
-        feature_branch=feature_branch,
-        cycle=cycle,
-        feedback=feedback,
-    )
-    try:
-        conversation.send_message(prompt)
-        conversation.run()
-    finally:
-        try:
-            conversation.close()
-        except Exception:
-            pass
-        try:
-            workspace.__exit__(None, None, None)
-        except Exception:
-            pass
-
-    if phase == WorkflowPhase.DEPLOY:
-        status, pr_url, summary = parse_result_file(repo_dir / ".openhands_result.json")
-        # Deterministic fallback: the agent may push the branch but skip writing the
-        # result file or opening the PR. If we still have no PR url, open/find it via gh.
-        if not pr_url and _has_committed_changes(repo_dir, base_branch, feature_branch):
-            fallback_url = _ensure_pull_request(repo_dir, base_branch, feature_branch, goal)
-            if fallback_url:
-                pr_url = fallback_url
-                status = "finished"
-                summary = summary or "Pull request opened by deploy fallback."
-                _emit_log(on_log, f"Deploy fallback opened/located PR: {pr_url}")
-        phase_status = "passed" if status == "finished" and pr_url else "failed"
-        outcome = PhaseOutcome(
-            phase=phase,
-            cycle=cycle,
-            status=phase_status,
-            summary=summary or (f"PR: {pr_url}" if pr_url else None),
-            feedback=None if phase_status == "passed" else summary,
-            pr_url=pr_url,
+        agent_record_id=role.agent_record_id or None,
+    ):
+        _emit_log(
+            on_log,
+            f"── {role.display_name} · {phase.value} (cycle {cycle}) ──",
+            event_kind="workflow",
         )
-    else:
-        phase_status, summary, feedback_text = parse_phase_result(phase_path)
-        # Guard: a "passed" develop phase that produced no committed change vs base
-        # is a false completion (e.g. agent claims the fix already exists). Force a
-        # retry so the workflow does not finish without an actual diff/PR.
-        if (
-            phase == WorkflowPhase.DEVELOP
-            and phase_status == "passed"
-            and not _has_committed_changes(repo_dir, base_branch, feature_branch)
-        ):
-            phase_status = "failed"
-            feedback_text = (
-                "No committed changes were detected on the feature branch versus "
-                f"`{base_branch}`. The goal requires an actual code change. Verify the "
-                "current state in the repository (do not assume it is already done), "
-                "make the required edit, and commit it to "
-                f"`{feature_branch}`."
+
+        graph.add_node(
+            node_id,
+            phase=phase.value,
+            cycle=cycle,
+            status="running",
+            agent=role.display_name,
+            role=role.role,
+        )
+
+        _, conversation, workspace = create_agent_and_conversation(
+            repo_dir=repo_dir,
+            api_key=api_key,
+            skills=role.skills,
+            openhands_settings=role.openhands_settings,
+            mcp_servers=role.mcp_servers,
+            system_instruction=role.system_instruction,
+            on_log=on_log,
+            openhands_sandbox=openhands_sandbox,
+        )
+
+        phase_path = repo_dir / PHASE_RESULT_FILE
+        if phase_path.exists():
+            phase_path.unlink()
+
+        prompt = _phase_prompt(
+            phase,
+            goal=goal,
+            base_branch=base_branch,
+            feature_branch=feature_branch,
+            cycle=cycle,
+            feedback=feedback,
+        )
+        try:
+            conversation.send_message(prompt)
+            conversation.run()
+        finally:
+            try:
+                conversation.close()
+            except Exception:
+                pass
+            try:
+                workspace.__exit__(None, None, None)
+            except Exception:
+                pass
+
+        if phase == WorkflowPhase.DEPLOY:
+            status, pr_url, summary = parse_result_file(repo_dir / ".openhands_result.json")
+            # Deterministic fallback: the agent may push the branch but skip writing the
+            # result file or opening the PR. If we still have no PR url, open/find it via gh.
+            if not pr_url and _has_committed_changes(repo_dir, base_branch, feature_branch):
+                fallback_url = _ensure_pull_request(repo_dir, base_branch, feature_branch, goal)
+                if fallback_url:
+                    pr_url = fallback_url
+                    status = "finished"
+                    summary = summary or "Pull request opened by deploy fallback."
+                    _emit_log(
+                        on_log,
+                        f"Deploy fallback opened/located PR: {pr_url}",
+                        event_kind="workflow",
+                    )
+            phase_status = "passed" if status == "finished" and pr_url else "failed"
+            outcome = PhaseOutcome(
+                phase=phase,
+                cycle=cycle,
+                status=phase_status,
+                summary=summary or (f"PR: {pr_url}" if pr_url else None),
+                feedback=None if phase_status == "passed" else summary,
+                pr_url=pr_url,
             )
-            summary = summary or "No changes produced"
-        outcome = PhaseOutcome(
-            phase=phase,
-            cycle=cycle,
-            status=phase_status,
-            summary=summary,
-            feedback=feedback_text,
-        )
+        else:
+            phase_status, summary, feedback_text = parse_phase_result(phase_path)
+            # Guard: a "passed" develop phase that produced no committed change vs base
+            # is a false completion (e.g. agent claims the fix already exists). Force a
+            # retry so the workflow does not finish without an actual diff/PR.
+            if (
+                phase == WorkflowPhase.DEVELOP
+                and phase_status == "passed"
+                and not _has_committed_changes(repo_dir, base_branch, feature_branch)
+            ):
+                phase_status = "failed"
+                feedback_text = (
+                    "No committed changes were detected on the feature branch versus "
+                    f"`{base_branch}`. The goal requires an actual code change. Verify the "
+                    "current state in the repository (do not assume it is already done), "
+                    "make the required edit, and commit it to "
+                    f"`{feature_branch}`."
+                )
+                summary = summary or "No changes produced"
+            outcome = PhaseOutcome(
+                phase=phase,
+                cycle=cycle,
+                status=phase_status,
+                summary=summary,
+                feedback=feedback_text,
+            )
 
-    for node in graph.nodes:
-        if node.get("id") == node_id:
-            node["status"] = outcome.status
-            node["summary"] = outcome.summary
-            node["feedback"] = outcome.feedback
-            break
+        for node in graph.nodes:
+            if node.get("id") == node_id:
+                node["status"] = outcome.status
+                node["summary"] = outcome.summary
+                node["feedback"] = outcome.feedback
+                break
 
-    _emit_workflow(
-        on_workflow,
-        {
-            "type": "workflow",
-            "event": "phase_end",
-            "phase": phase.value,
-            "cycle": cycle,
-            "node_id": node_id,
-            "status": outcome.status,
-            "summary": outcome.summary,
-            "feedback": outcome.feedback,
-            "agent": role.display_name,
-        },
-    )
-    _emit_log(
-        on_log,
-        f"── {phase.value} finished: {outcome.status}"
-        + (f" — {outcome.summary}" if outcome.summary else ""),
-    )
-    if on_chat:
-        parts = [
-            f"{role.display_name} — {phase.value} (cycle {cycle}): {outcome.status}",
-        ]
-        if outcome.summary:
-            parts.append(outcome.summary)
-        if outcome.feedback:
-            parts.append(f"Feedback: {outcome.feedback}")
-        _emit_chat(
-            on_chat,
+        _emit_workflow(
+            on_workflow,
             {
-                "type": "chat",
-                "role": "assistant",
-                "content": "\n\n".join(parts),
-                "metadata": {
-                    "phase": phase.value,
-                    "cycle": cycle,
-                    "agent": role.display_name,
-                    "status": outcome.status,
-                },
+                "type": "workflow",
+                "event": "phase_end",
+                "phase": phase.value,
+                "cycle": cycle,
+                "node_id": node_id,
+                "status": outcome.status,
+                "summary": outcome.summary,
+                "feedback": outcome.feedback,
+                "agent": role.display_name,
             },
         )
-    return outcome
+        _emit_log(
+            on_log,
+            f"── {phase.value} finished: {outcome.status}"
+            + (f" — {outcome.summary}" if outcome.summary else ""),
+            event_kind="workflow",
+        )
+        if on_chat:
+            parts = [
+                f"{role.display_name} — {phase.value} (cycle {cycle}): {outcome.status}",
+            ]
+            if outcome.summary:
+                parts.append(outcome.summary)
+            if outcome.feedback:
+                parts.append(f"Feedback: {outcome.feedback}")
+            _emit_chat(
+                on_chat,
+                {
+                    "type": "chat",
+                    "role": "assistant",
+                    "content": "\n\n".join(parts),
+                    "metadata": {
+                        "phase": phase.value,
+                        "cycle": cycle,
+                        "agent": role.display_name,
+                        "status": outcome.status,
+                    },
+                },
+            )
+        return outcome
 
 
 def run_implementation_workflow(
@@ -478,6 +508,7 @@ def run_implementation_workflow(
     _emit_log(
         on_log,
         f"Starting multi-agent workflow ({cycle_label}, max {max_cycles} cycles)",
+        event_kind="workflow",
     )
 
     deploy = roles[WorkflowPhase.DEPLOY.value] if deploy_key else None
@@ -491,7 +522,7 @@ def run_implementation_workflow(
             on_workflow,
             {"type": "workflow", "event": "cycle_start", "cycle": cycle},
         )
-        _emit_log(on_log, f"════ Cycle {cycle}/{max_cycles} ════")
+        _emit_log(on_log, f"════ Cycle {cycle}/{max_cycles} ════", event_kind="workflow")
 
         cycle_ok = True
         for phase_key in cycle_phase_keys:
@@ -522,7 +553,11 @@ def run_implementation_workflow(
             if outcome.status != "passed":
                 cycle_ok = False
                 feedback = outcome.feedback or outcome.summary or f"{phase.value} did not pass"
-                _emit_log(on_log, f"Cycle {cycle}: returning to develop — {feedback[:200]}")
+                _emit_log(
+                    on_log,
+                    f"Cycle {cycle}: returning to develop — {feedback[:200]}",
+                    event_kind="workflow",
+                )
                 break
 
         if cycle_ok:

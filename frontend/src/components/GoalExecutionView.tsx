@@ -123,6 +123,57 @@ function applyWorkflowEvent(
   }
 }
 
+type ExecutionLogRow = {
+  line: string;
+  agent?: string;
+  phase?: string;
+  cycle?: number;
+  event_kind?: string;
+  message_role?: string;
+  action_type?: string;
+  observation_kind?: string;
+  body?: string;
+};
+
+function executionLogKindLabel(row: ExecutionLogRow): string | null {
+  if (row.action_type) return row.action_type;
+  if (row.observation_kind) return row.observation_kind;
+  if (row.message_role) return `msg:${row.message_role}`;
+  if (row.event_kind === 'workflow') return 'workflow';
+  if (row.event_kind === 'orchestrator') return 'setup';
+  if (row.event_kind === 'llm_message') return 'message';
+  if (row.event_kind === 'tool_action') return 'tool';
+  if (row.event_kind === 'observation') return 'observe';
+  if (row.event_kind) return row.event_kind;
+  return null;
+}
+
+function GoalLogLine({ row }: { row: ExecutionLogRow }) {
+  const kind = executionLogKindLabel(row);
+  const text = (row.body && row.body.trim()) || row.line;
+  const showBadges = Boolean(
+    row.agent || (row.phase && row.phase !== 'goal') || row.cycle != null || kind,
+  );
+
+  return (
+    <div className="goal-log-row">
+      {showBadges ? (
+        <div className="goal-log-row-badges">
+          {row.agent ? <span className="goal-log-badge goal-log-badge-agent">{row.agent}</span> : null}
+          {row.phase && row.phase !== 'goal' ? (
+            <span className="goal-log-badge goal-log-badge-phase">{row.phase}</span>
+          ) : null}
+          {row.cycle != null && row.phase && row.phase !== 'goal' ? (
+            <span className="goal-log-badge goal-log-badge-cycle">c{row.cycle}</span>
+          ) : null}
+          {kind ? <span className="goal-log-badge goal-log-badge-kind">{kind}</span> : null}
+        </div>
+      ) : null}
+      <div className="goal-log-row-text">{text}</div>
+    </div>
+  );
+}
+
 export function GoalExecutionView({
   goal,
   onGoalUpdate,
@@ -131,7 +182,7 @@ export function GoalExecutionView({
   backTo,
   onStreamChat,
 }: GoalExecutionViewProps) {
-  const [lines, setLines] = useState<string[]>([]);
+  const [logRows, setLogRows] = useState<ExecutionLogRow[]>([]);
   const [status, setStatus] = useState<string>(goal.execution_status ?? 'starting');
   const [error, setError] = useState<string | null>(goal.execution_error);
   const [prUrl, setPrUrl] = useState<string | null>(goal.pr_url);
@@ -149,7 +200,7 @@ export function GoalExecutionView({
       : [],
   );
   const [streamChat, setStreamChat] = useState<GoalChatMessage | null>(null);
-  const logRef = useRef<HTMLPreElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
   const isWorkflow = useMemo(
     () => Boolean(workflowGraph?.nodes?.length || timeline.length > 0),
@@ -166,14 +217,14 @@ export function GoalExecutionView({
     if (logRef.current && panelTab === 'logs') {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [lines, tab, variant]);
+  }, [logRows, tab, variant]);
 
   const handleResume = useCallback(async () => {
     setResuming(true);
     setError(null);
     setFinished(false);
     setStatus('running');
-    setLines(['Retrying agent run…']);
+    setLogRows([{ line: 'Retrying agent run…' }]);
     setTimeline([]);
     if (variant === 'page') onStreamChat?.(null);
     else setStreamChat(null);
@@ -197,21 +248,32 @@ export function GoalExecutionView({
   }, [goal.id, goal.workflow_graph, goal.execution_status]);
 
   useEffect(() => {
-    function appendLine(line: string) {
-      setLines((prev) => [...prev, line]);
+    function appendLogRow(row: ExecutionLogRow) {
+      setLogRows((prev) => [...prev, row]);
     }
 
     function handleEvent(event: GoalStreamEvent) {
       applyWorkflowEvent(event, setTimeline, setWorkflowGraph);
 
       if (event.type === 'log' && event.line) {
-        appendLine(event.line);
+        appendLogRow({
+          line: event.line,
+          agent: event.agent,
+          phase: event.phase,
+          cycle: event.cycle,
+          event_kind: event.event_kind,
+          message_role: event.message_role,
+          action_type: event.action_type,
+          observation_kind: event.observation_kind,
+          body: event.body,
+        });
       }
       if (event.type === 'delta' && event.text) {
-        setLines((prev) => {
-          if (prev.length === 0) return [event.text!];
+        setLogRows((prev) => {
+          if (prev.length === 0) return [{ line: event.text! }];
           const next = [...prev];
-          next[next.length - 1] = next[next.length - 1] + event.text;
+          const last = next[next.length - 1];
+          next[next.length - 1] = { ...last, line: last.line + event.text! };
           return next;
         });
       }
@@ -220,7 +282,7 @@ export function GoalExecutionView({
       }
       if (event.type === 'error' && event.message) {
         setError(event.message);
-        appendLine(`[error] ${event.message}`);
+        appendLogRow({ line: `[error] ${event.message}` });
       }
       if (event.type === 'chat' && event.chat_message) {
         if (variant === 'page') onStreamChat?.(event.chat_message);
@@ -309,9 +371,13 @@ export function GoalExecutionView({
       {panelTab === 'graph' && <GoalWorkflowGraph graph={workflowGraph} />}
       {panelTab === 'timeline' && <GoalWorkflowTimeline entries={timeline} />}
       {panelTab === 'logs' && (
-        <pre ref={logRef} className="goal-execution-log" aria-live="polite">
-          {lines.length === 0 ? 'Waiting for agent logs…' : lines.join('\n')}
-        </pre>
+        <div ref={logRef} className="goal-execution-log" aria-live="polite">
+          {logRows.length === 0 ? (
+            <span className="goal-log-empty">Waiting for agent logs…</span>
+          ) : (
+            logRows.map((row, i) => <GoalLogLine key={i} row={row} />)
+          )}
+        </div>
       )}
       {variant === 'modal' && tab === 'chat' && (
         <GoalChatPanel goalId={goal.id} streamChat={streamChat} />

@@ -31,7 +31,11 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+from agent_log_context import current_workflow_agent_context, workflow_agent_context
 from openhands_workspace import resolve_openhands_workspace
+
+# Log sink: optional second dict carries agent / phase / event_kind for structured UIs.
+EmitLog = Callable[[str, dict[str, Any] | None], None]
 
 # LiteLLM logs a warning when botocore is absent (SageMaker/Bedrock streaming).
 # We use the OpenAI-compatible GAP proxy only; suppress optional-provider noise.
@@ -210,7 +214,15 @@ def feature_branch_for_repo(repo_url: str, goal_id: str | None = None) -> str:
     return f"openhands/{slug}"[:120]
 
 
-def format_openhands_event(event: Any) -> str | None:
+def _truncate(s: str, max_len: int) -> str:
+    s = s.strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
+def openhands_event_meta(event: Any) -> dict[str, Any] | None:
+    """Map an OpenHands stream event to structured log fields (preview + kind)."""
     name = type(event).__name__
     if name == "MessageEvent":
         role = getattr(getattr(event, "llm_message", None), "role", "?")
@@ -234,32 +246,139 @@ def format_openhands_event(event: Any) -> str | None:
             text = str(event).strip()
         if not text:
             return None
-        preview = text if len(text) <= 600 else text[:600] + "…"
-        return f"[{role}] {preview}"
+        return {
+            "event_kind": "llm_message",
+            "message_role": str(role),
+            "preview": _truncate(text, 600),
+        }
     if name == "ActionEvent":
         action = getattr(event, "action", None)
-        kind = getattr(action, "kind", None) or type(action).__name__
-        line = f"[action] {kind}"
+        kind = getattr(action, "kind", None) or (type(action).__name__ if action else "action")
+        parts = [str(kind)]
         message = getattr(action, "message", None) if action else None
         if isinstance(message, str) and message.strip():
-            msg = message.strip()
-            if len(msg) > 400:
-                msg = msg[:400] + "…"
-            line += f": {msg}"
-        return line
+            parts.append(_truncate(message.strip(), 400))
+        preview = " — ".join(parts) if len(parts) > 1 else parts[0]
+        return {
+            "event_kind": "tool_action",
+            "action_type": str(kind),
+            "preview": preview,
+        }
     if name == "ObservationEvent":
         obs = getattr(event, "observation", None)
-        kind = getattr(obs, "kind", None) or type(obs).__name__
+        okind = getattr(obs, "kind", None) or (type(obs).__name__ if obs else "observation")
         text = str(obs).strip() if obs is not None else ""
-        if len(text) > 500:
-            text = text[:500] + "…"
-        return f"[observation] {kind}" + (f" {text}" if text else "")
+        preview = _truncate(text, 500) if text else str(okind)
+        return {
+            "event_kind": "observation",
+            "observation_kind": str(okind),
+            "preview": preview,
+        }
     text = str(event).strip()
     if not text or text == name:
         return None
-    if len(text) > 500:
-        text = text[:500] + "…"
-    return f"[{name}] {text}"
+    return {
+        "event_kind": "system",
+        "preview": _truncate(text, 500),
+    }
+
+
+def log_line_prefix(merged: dict[str, Any]) -> str:
+    """Build a short bracket prefix: who is acting + what kind of event."""
+    agent = str(merged.get("agent") or "").strip()
+    phase = str(merged.get("phase") or "").strip()
+    cycle = merged.get("cycle")
+    event_kind = str(merged.get("event_kind") or "").strip()
+
+    scope: list[str] = []
+    if agent:
+        scope.append(agent)
+    elif event_kind == "orchestrator":
+        scope.append("Harness")
+    elif event_kind == "workflow":
+        scope.append("Workflow")
+
+    if phase and phase != "goal":
+        scope.append(phase)
+    if cycle is not None and phase and phase != "goal":
+        try:
+            scope.append(f"c{int(cycle)}")
+        except (TypeError, ValueError):
+            pass
+
+    kind_label = ""
+    if event_kind == "llm_message":
+        role = str(merged.get("message_role") or "message").strip()
+        kind_label = f"message:{role}"
+    elif event_kind == "tool_action":
+        kind_label = f"action:{str(merged.get('action_type') or 'tool').strip()}"
+    elif event_kind == "observation":
+        kind_label = f"observe:{str(merged.get('observation_kind') or '?').strip()}"
+    elif event_kind == "orchestrator":
+        kind_label = "setup"
+    elif event_kind == "workflow":
+        kind_label = "workflow"
+    elif event_kind == "system":
+        kind_label = "event"
+
+    left = " · ".join(scope) if scope else "log"
+    if kind_label:
+        return f"[{left} | {kind_label}]"
+    return f"[{left}]"
+
+
+def compose_structured_log(
+    wf_ctx: dict[str, Any],
+    event_meta: dict[str, Any],
+) -> tuple[str, str, dict[str, Any]]:
+    """Return (full_line, body, merged_meta) for NDJSON / persistence."""
+    merged: dict[str, Any] = {**wf_ctx, **event_meta}
+    body = str(merged.get("preview") or "").strip()
+    prefix = log_line_prefix(merged)
+    full = f"{prefix} {body}".strip() if body else prefix
+    return full, body, merged
+
+
+def slim_log_fields(merged: dict[str, Any], body: str) -> dict[str, Any]:
+    keys = (
+        "agent",
+        "phase",
+        "cycle",
+        "agent_record_id",
+        "event_kind",
+        "message_role",
+        "action_type",
+        "observation_kind",
+        "preview",
+    )
+    slim: dict[str, Any] = {k: merged[k] for k in keys if k in merged and merged[k] is not None}
+    if body:
+        slim["body"] = body
+    return slim
+
+
+def emit_harness_log(
+    on_log: EmitLog | None,
+    message: str,
+    *,
+    event_kind: str = "orchestrator",
+    **wf_fields: Any,
+) -> None:
+    """Log a harness / setup line with optional workflow context."""
+    if not on_log:
+        return
+    wf = {**current_workflow_agent_context(), **wf_fields}
+    full, body, merged = compose_structured_log(wf, {"event_kind": event_kind, "preview": message})
+    on_log(full, slim_log_fields(merged, body))
+
+
+def format_openhands_event(event: Any) -> str | None:
+    """Plain string for callers that only need one line (tests, legacy)."""
+    meta = openhands_event_meta(event)
+    if not meta:
+        return None
+    full, _, _ = compose_structured_log(current_workflow_agent_context(), meta)
+    return full
 
 
 def build_goal_prompt(goal: str, base_branch: str, feature_branch: str) -> str:
@@ -353,7 +472,7 @@ def run_workflow_for_repo(
     keep_workspaces: bool = False,
     goal_id: str | None = None,
     github_token: str | None = None,
-    on_log: Callable[[str], None] | None = None,
+    on_log: EmitLog | None = None,
     on_workflow: Callable[[dict[str, Any]], None] | None = None,
     on_chat: Callable[[dict[str, Any]], None] | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
@@ -376,11 +495,11 @@ def run_workflow_for_repo(
             mode = f"workflow sandbox ({openhands_sandbox.get('kind')})"
         else:
             mode = "remote Docker runtime" if (os.environ.get("OPENHANDS_RUNTIME_HOST") or "").strip() else "local"
-        on_log(f"OpenHands per-goal workspace ({mode}): {workspace_parent}")
+        emit_harness_log(on_log, f"OpenHands per-goal workspace ({mode}): {workspace_parent}")
 
     try:
         if on_log:
-            on_log(f"Cloning {repo_url} (branch {base_branch})…")
+            emit_harness_log(on_log, f"Cloning {repo_url} (branch {base_branch})…")
         clone_repo(clone_url, base_branch, repo_dir)
     except subprocess.CalledProcessError as exc:
         return (
@@ -397,7 +516,7 @@ def run_workflow_for_repo(
 
     try:
         if on_log:
-            on_log(f"Multi-agent workflow (model={model})")
+            emit_harness_log(on_log, f"Multi-agent workflow (model={model})")
         role_specs: dict[str, RoleAgentSpec] = {}
         for role_key, spec in roles.items():
             role_specs[role_key] = RoleAgentSpec(
@@ -458,12 +577,16 @@ def run_for_repo(
     goal_id: str | None = None,
     github_token: str | None = None,
     skills: list[dict[str, Any]] | None = None,
-    on_log: Callable[[str], None] | None = None,
+    on_log: EmitLog | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
 ) -> RepoRunResult:
-    def log(line: str) -> None:
-        if on_log:
-            on_log(line)
+    def log(line: str, meta: dict[str, Any] | None = None) -> None:
+        if not on_log:
+            return
+        if meta is None:
+            emit_harness_log(on_log, line)
+        else:
+            on_log(line, meta)
 
     (
         Agent,
@@ -506,101 +629,104 @@ def run_for_repo(
             error=(exc.stderr or exc.stdout or str(exc)).strip()[-500:],
         )
 
-    try:
-        installed_skills: list[str] = []
-        if skills:
-            installed_skills = materialize_skills(repo_dir, skills)
-            if installed_skills:
-                log(f"Installed OpenHands skills: {', '.join(installed_skills)}")
-
-        log(f"Starting OpenHands agent (model={model})…")
-        llm = build_llm(model=model, api_key=api_key)
-        agent_context = (
-            AgentContext(load_project_skills=True) if installed_skills else None
-        )
-        agent = Agent(
-            llm=llm,
-            agent_context=agent_context,
-            tools=[
-                Tool(name=TerminalTool.name),
-                Tool(name=FileEditorTool.name),
-                Tool(name=TaskTrackerTool.name),
-            ],
-        )
-
-        def event_callback(event: Any) -> None:
-            line = format_openhands_event(event)
-            if line:
-                log(line)
-
-        workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
-        if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "docker":
-            log(f"Using OpenHands RemoteWorkspace at {openhands_sandbox.get('runtime_host', '')}")
-        elif isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "remote":
-            log("Using OpenHands APIRemoteWorkspace (hosted runtime API).")
-        elif os.environ.get("OPENHANDS_RUNTIME_HOST", "").strip():
-            log("Using OpenHands RemoteWorkspace (Docker runtime server).")
-        else:
-            log(f"Using OpenHands LocalWorkspace at {repo_dir}")
-
-        conversation = Conversation(
-            agent=agent,
-            workspace=workspace,
-            callbacks=[event_callback],
-            visualizer=None,
-        )
-
-        prompt = build_goal_prompt(goal, base_branch, feature_branch)
+    with workflow_agent_context(agent="Coding agent", phase="goal", cycle=0):
         try:
-            conversation.send_message(prompt)
-            conversation.run()
+            installed_skills: list[str] = []
+            if skills:
+                installed_skills = materialize_skills(repo_dir, skills)
+                if installed_skills:
+                    log(f"Installed OpenHands skills: {', '.join(installed_skills)}")
+
+            log(f"Starting OpenHands agent (model={model})…")
+            llm = build_llm(model=model, api_key=api_key)
+            agent_context = (
+                AgentContext(load_project_skills=True) if installed_skills else None
+            )
+            agent = Agent(
+                llm=llm,
+                agent_context=agent_context,
+                tools=[
+                    Tool(name=TerminalTool.name),
+                    Tool(name=FileEditorTool.name),
+                    Tool(name=TaskTrackerTool.name),
+                ],
+            )
+
+            def event_callback(event: Any) -> None:
+                meta = openhands_event_meta(event)
+                if not meta:
+                    return
+                full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
+                log(full, slim_log_fields(merged, body))
+
+            workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
+            if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "docker":
+                log(f"Using OpenHands RemoteWorkspace at {openhands_sandbox.get('runtime_host', '')}")
+            elif isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "remote":
+                log("Using OpenHands APIRemoteWorkspace (hosted runtime API).")
+            elif os.environ.get("OPENHANDS_RUNTIME_HOST", "").strip():
+                log("Using OpenHands RemoteWorkspace (Docker runtime server).")
+            else:
+                log(f"Using OpenHands LocalWorkspace at {repo_dir}")
+
+            conversation = Conversation(
+                agent=agent,
+                workspace=workspace,
+                callbacks=[event_callback],
+                visualizer=None,
+            )
+
+            prompt = build_goal_prompt(goal, base_branch, feature_branch)
+            try:
+                conversation.send_message(prompt)
+                conversation.run()
+            finally:
+                try:
+                    conversation.close()
+                except Exception:
+                    pass
+                try:
+                    workspace.__exit__(None, None, None)
+                except Exception:
+                    pass
+
+            state = getattr(conversation, "state", None)
+            events = getattr(state, "events", []) if state is not None else []
+            output_text = "\n".join(str(event) for event in events[-8:])
+
+            status, pr_url, summary = parse_result_file(repo_dir / RESULT_FILE)
+            pr_from_text = extract_pr_from_text(output_text)
+            if not pr_url and pr_from_text:
+                pr_url = pr_from_text
+            if not summary:
+                summary = f"Goal executed on {repo_url}"
+
+            if stream:
+                print(f"\n--- Completed {repo_url} ---", file=sys.stderr)
+
+            finished = status == "finished" and pr_url is not None
+            if finished:
+                log(f"Agent finished. PR: {pr_url}")
+            return RepoRunResult(
+                repo=repo_url,
+                status="finished" if finished else "failed",
+                pr_url=pr_url,
+                summary=summary,
+                workspace=str(workspace_parent),
+                error=None if finished else output_text[-500:] or "run failed",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return RepoRunResult(
+                repo=repo_url,
+                status="exception",
+                pr_url=None,
+                summary=None,
+                workspace=str(workspace_parent),
+                error=str(exc),
+            )
         finally:
-            try:
-                conversation.close()
-            except Exception:
-                pass
-            try:
-                workspace.__exit__(None, None, None)
-            except Exception:
-                pass
-
-        state = getattr(conversation, "state", None)
-        events = getattr(state, "events", []) if state is not None else []
-        output_text = "\n".join(str(event) for event in events[-8:])
-
-        status, pr_url, summary = parse_result_file(repo_dir / RESULT_FILE)
-        pr_from_text = extract_pr_from_text(output_text)
-        if not pr_url and pr_from_text:
-            pr_url = pr_from_text
-        if not summary:
-            summary = f"Goal executed on {repo_url}"
-
-        if stream:
-            print(f"\n--- Completed {repo_url} ---", file=sys.stderr)
-
-        finished = status == "finished" and pr_url is not None
-        if finished:
-            log(f"Agent finished. PR: {pr_url}")
-        return RepoRunResult(
-            repo=repo_url,
-            status="finished" if finished else "failed",
-            pr_url=pr_url,
-            summary=summary,
-            workspace=str(workspace_parent),
-            error=None if finished else output_text[-500:] or "run failed",
-        )
-    except Exception as exc:  # noqa: BLE001
-        return RepoRunResult(
-            repo=repo_url,
-            status="exception",
-            pr_url=None,
-            summary=None,
-            workspace=str(workspace_parent),
-            error=str(exc),
-        )
-    finally:
-        if not keep_workspaces:
-            shutil.rmtree(workspace_parent, ignore_errors=True)
+            if not keep_workspaces:
+                shutil.rmtree(workspace_parent, ignore_errors=True)
 
 
 def print_human_report(results: list[RepoRunResult]) -> None:

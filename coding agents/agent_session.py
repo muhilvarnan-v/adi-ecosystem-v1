@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from openhands_workspace import resolve_openhands_workspace
-from run_multi_repo import build_llm, format_openhands_event, import_openhands_sdk, resolve_llm_model
+from run_multi_repo import (
+    build_llm,
+    compose_structured_log,
+    current_workflow_agent_context,
+    import_openhands_sdk,
+    openhands_event_meta,
+    resolve_llm_model,
+    slim_log_fields,
+)
 from skills_setup import materialize_skills
 
 
@@ -61,7 +69,7 @@ def create_agent_and_conversation(
     openhands_settings: dict[str, Any] | None = None,
     mcp_servers: list[dict[str, Any]] | None = None,
     system_instruction: str | None = None,
-    on_log: Callable[[str], None] | None = None,
+    on_log: Callable[[str, dict[str, Any] | None], None] | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
 ) -> tuple[Any, Any, Any]:
     settings = openhands_settings or {}
@@ -120,9 +128,11 @@ def create_agent_and_conversation(
     agent = Agent(**agent_kwargs)
 
     def event_callback(event: Any) -> None:
-        line = format_openhands_event(event)
-        if line and on_log:
-            on_log(line)
+        meta = openhands_event_meta(event)
+        if not meta or not on_log:
+            return
+        full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
+        on_log(full, slim_log_fields(merged, body))
 
     workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
     conversation = Conversation(

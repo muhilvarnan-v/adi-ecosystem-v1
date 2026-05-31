@@ -56,6 +56,13 @@ export type GoalStreamEvent = {
   summary?: string;
   feedback?: string;
   graph?: import('../types').WorkflowGraph;
+  /** Structured execution log (OpenHands + harness); see coding agents NDJSON `type: log`. */
+  event_kind?: string;
+  message_role?: string;
+  action_type?: string;
+  observation_kind?: string;
+  preview?: string;
+  body?: string;
 };
 
 export function streamGoalExecution(

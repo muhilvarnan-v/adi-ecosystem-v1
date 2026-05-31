@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -64,8 +65,24 @@ def main() -> None:
     api_key = require_api_key()
     model = resolve_llm_model(None)
 
-    def on_log(line: str) -> None:
-        emit({"type": "log", "line": line})
+    def on_log(line: str, meta: dict[str, Any] | None = None) -> None:
+        payload: dict[str, Any] = {"type": "log", "line": line}
+        if meta:
+            for key in (
+                "agent",
+                "phase",
+                "cycle",
+                "agent_record_id",
+                "event_kind",
+                "message_role",
+                "action_type",
+                "observation_kind",
+                "preview",
+                "body",
+            ):
+                if key in meta and meta[key] is not None:
+                    payload[key] = meta[key]
+        emit(payload)
 
     on_log(f"LiteLLM base URL: {resolve_llm_base_url()}")
 

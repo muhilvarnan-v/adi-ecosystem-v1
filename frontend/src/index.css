@@ -1581,8 +1581,75 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.8rem;
   line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.goal-log-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.goal-log-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(21, 19, 20, 0.06);
+}
+
+.goal-log-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.goal-log-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.goal-log-badge {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  line-height: 1.3;
+}
+
+.goal-log-badge-agent {
+  background: linear-gradient(135deg, #e0e7ff 0%, #dbeafe 100%);
+  color: #1e3a5f;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.goal-log-badge-phase {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.goal-log-badge-cycle {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid var(--border);
+}
+
+.goal-log-badge-kind {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+.goal-log-row-text {
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--text);
 }
 
 .goal-execution-pr {

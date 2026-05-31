@@ -32,9 +32,18 @@ def goal_is_resumable(row: dict[str, Any]) -> bool:
     return bool(row.get("application_id"))
 
 
-def _append_log(goal_id: str, user_id: str, line: str, buffer: list[str]) -> None:
+def _append_log(
+    goal_id: str,
+    user_id: str,
+    line: str,
+    buffer: list[str],
+    meta: dict[str, Any] | None = None,
+) -> None:
     buffer.append(line)
-    goal_run_manager.emit(goal_id, {"type": "log", "line": line})
+    payload: dict[str, Any] = {"type": "log", "line": line}
+    if meta:
+        payload.update(meta)
+    goal_run_manager.emit(goal_id, payload)
 
 
 def _persist_logs(goal_id: str, user_id: str, lines: list[str]) -> None:
@@ -263,8 +272,8 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
             names = ", ".join(s["skill_id"] for s in skills)
             _append_log(goal_id, user_id, f"Loading OpenHands skills: {names}", log_buffer)
 
-        def on_log(line: str) -> None:
-            _append_log(goal_id, user_id, line, log_buffer)
+        def on_log(line: str, meta: dict[str, Any] | None = None) -> None:
+            _append_log(goal_id, user_id, line, log_buffer, meta)
 
         def on_workflow(event: dict) -> None:
             goal_run_manager.emit(goal_id, event)

@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from app.config import Settings
 
-LogCallback = Callable[[str], None]
+LogCallback = Callable[[str, dict[str, Any] | None], None]
 WorkflowCallback = Callable[[dict], None]
 ChatCallback = Callable[[dict], None]
 
@@ -130,7 +130,20 @@ def run_goal_on_repo(
 
         if event.get("type") == "log" and event.get("line"):
             if on_log:
-                on_log(str(event["line"]))
+                meta_keys = (
+                    "agent",
+                    "phase",
+                    "cycle",
+                    "agent_record_id",
+                    "event_kind",
+                    "message_role",
+                    "action_type",
+                    "observation_kind",
+                    "preview",
+                    "body",
+                )
+                meta = {k: event[k] for k in meta_keys if k in event and event[k] is not None}
+                on_log(str(event["line"]), meta if meta else None)
         elif event.get("type") == "workflow":
             if on_workflow:
                 on_workflow(event)
