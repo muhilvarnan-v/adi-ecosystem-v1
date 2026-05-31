@@ -39,6 +39,8 @@ export interface WorkflowGraphNode {
   agent?: string | null;
   role?: string | null;
   summary?: string | null;
+  /** Error detail when status is failed (e.g. phase result feedback). */
+  feedback?: string | null;
 }
 
 export interface WorkflowGraphEdge {
@@ -87,6 +89,16 @@ export interface Goal {
   resumable: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type GoalChatRole = 'user' | 'assistant' | 'system';
+
+export interface GoalChatMessage {
+  id: string;
+  role: GoalChatRole;
+  content: string;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export type IntegrationProvider = 'jira' | 'trello' | 'github' | 'zendesk';

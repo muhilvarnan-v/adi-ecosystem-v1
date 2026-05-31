@@ -7,6 +7,7 @@ from app.config import get_settings
 
 APPLICATIONS_COLLECTION = "applications"
 GOALS_COLLECTION = "goals"
+GOAL_CHAT_SUBCOLLECTION = "chat_messages"
 INTEGRATIONS_COLLECTION = "integrations"
 SKILLS_COLLECTION = "skills"
 ENVIRONMENTS_COLLECTION = "environments"  # legacy collection name; Harness UI: sandbox environments
@@ -262,8 +263,75 @@ class FirestoreService:
             return False
         if doc.to_dict().get("user_id") != user_id:
             return False
+        self.delete_goal_chat_messages(goal_id)
         ref.delete()
         return True
+
+    def delete_goal_chat_messages(self, goal_id: str) -> None:
+        coll = (
+            self._db.collection(GOALS_COLLECTION)
+            .document(goal_id)
+            .collection(GOAL_CHAT_SUBCOLLECTION)
+        )
+        while True:
+            docs = list(coll.limit(400).stream())
+            if not docs:
+                break
+            batch = self._db.batch()
+            for d in docs:
+                batch.delete(d.reference)
+            batch.commit()
+
+    def list_goal_chat_messages(
+        self,
+        goal_id: str,
+        user_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        if not self.get_goal(goal_id, user_id):
+            return []
+        coll = (
+            self._db.collection(GOALS_COLLECTION)
+            .document(goal_id)
+            .collection(GOAL_CHAT_SUBCOLLECTION)
+        )
+        query = coll.order_by("created_at", direction=firestore.Query.ASCENDING).limit(limit)
+        out: list[dict[str, Any]] = []
+        for doc in query.stream():
+            row = doc.to_dict() or {}
+            row["id"] = doc.id
+            out.append(row)
+        return out
+
+    def append_goal_chat_message(
+        self,
+        goal_id: str,
+        user_id: str,
+        *,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.get_goal(goal_id, user_id):
+            return None
+        now = _utc_now()
+        data: dict[str, Any] = {
+            "user_id": user_id,
+            "role": role,
+            "content": content,
+            "metadata": metadata if isinstance(metadata, dict) else None,
+            "created_at": now,
+        }
+        ref = (
+            self._db.collection(GOALS_COLLECTION)
+            .document(goal_id)
+            .collection(GOAL_CHAT_SUBCOLLECTION)
+            .document()
+        )
+        ref.set(data)
+        data["id"] = ref.id
+        return data
 
     # --- Integrations (doc id: {user_id}_{provider}) ---
 

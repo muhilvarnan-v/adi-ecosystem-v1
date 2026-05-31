@@ -99,6 +99,7 @@ def main() -> None:
             github_token=github_token,
             on_log=on_log,
             on_workflow=on_workflow,
+            on_chat=emit,
             openhands_sandbox=openhands_sandbox,
         )
     else:

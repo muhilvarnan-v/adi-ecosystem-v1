@@ -86,6 +86,19 @@ def _build_goal_text(row: dict[str, Any]) -> str:
     return title or description or "Implement the requested goal"
 
 
+def _format_chat_thread_for_prompt(db, goal_id: str, user_id: str) -> str:
+    rows = db.list_goal_chat_messages(goal_id, user_id, limit=100)
+    if not rows:
+        return ""
+    lines: list[str] = []
+    for r in rows:
+        role = str(r.get("role") or "user").strip().lower()
+        content = str(r.get("content") or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 def _complete_goal(
     goal_id: str,
     user_id: str,
@@ -171,6 +184,15 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
 
         base_branch = _fetch_default_branch(repo_url, github_token)
         goal_text = _build_goal_text(row)
+        chat_ctx = _format_chat_thread_for_prompt(db, goal_id, user_id)
+        if chat_ctx:
+            goal_text = (
+                f"{goal_text}\n\n---\n"
+                "Prior conversation with the user about this goal (chronological):\n"
+                f"{chat_ctx}\n---\n"
+                "Use this thread when implementing. If the user asked something you cannot resolve "
+                "from the repository alone, state your assumptions clearly in phase feedback or the PR."
+            )
 
         skills: list[dict] = []
         workflow_roles: dict | None = None
@@ -320,6 +342,37 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
                 log_buffer,
             )
 
+        def on_agent_chat(event: dict[str, Any]) -> None:
+            raw_role = str(event.get("role") or "assistant").strip().lower()
+            if raw_role not in ("assistant", "system"):
+                raw_role = "assistant"
+            content = str(event.get("content") or "").strip()
+            if not content:
+                return
+            meta = event.get("metadata")
+            added = db.append_goal_chat_message(
+                goal_id,
+                user_id,
+                role=raw_role,
+                content=content,
+                metadata=meta if isinstance(meta, dict) else None,
+            )
+            if not added:
+                return
+            goal_run_manager.emit(
+                goal_id,
+                {
+                    "type": "chat",
+                    "chat_message": {
+                        "id": added["id"],
+                        "role": added.get("role", raw_role),
+                        "content": added.get("content", content),
+                        "metadata": added.get("metadata"),
+                        "created_at": added.get("created_at"),
+                    },
+                },
+            )
+
         result, workflow_graph = run_goal_on_repo(
             settings=settings,
             repo_url=repo_url,
@@ -333,6 +386,7 @@ def _execute_goal_sync(goal_id: str, user_id: str) -> None:
             max_cycles=max_cycles_exec,
             on_log=on_log,
             on_workflow=on_workflow if use_workflow else None,
+            on_chat=on_agent_chat,
             openhands_sandbox=openhands_sandbox,
             openhands_settings=openhands_settings_for_run if not use_workflow else None,
         )

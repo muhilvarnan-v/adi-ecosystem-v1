@@ -1,6 +1,6 @@
 import { getUserId } from '../lib/user';
 import { api } from './client';
-import type { Goal, GoalStatus, WorkflowRoles } from '../types';
+import type { Goal, GoalChatMessage, GoalStatus, WorkflowRoles } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -11,6 +11,14 @@ export function listGoals(applicationId?: string) {
 
 export function getGoal(id: string) {
   return api.get<Goal>(`/api/goals/${id}`);
+}
+
+export function listGoalChat(goalId: string) {
+  return api.get<GoalChatMessage[]>(`/api/goals/${goalId}/chat`);
+}
+
+export function postGoalChat(goalId: string, content: string) {
+  return api.post<GoalChatMessage>(`/api/goals/${goalId}/chat`, { content });
 }
 
 export function createGoal(
@@ -30,11 +38,12 @@ export function createGoal(
 }
 
 export type GoalStreamEvent = {
-  type: 'log' | 'delta' | 'status' | 'error' | 'complete' | 'done' | 'workflow';
+  type: 'log' | 'delta' | 'status' | 'error' | 'complete' | 'done' | 'workflow' | 'chat';
   line?: string;
   text?: string;
   status?: string;
   message?: string;
+  chat_message?: GoalChatMessage;
   pr_url?: string;
   error?: string;
   event?: string;

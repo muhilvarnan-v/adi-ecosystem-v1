@@ -13,6 +13,7 @@ from app.config import Settings
 
 LogCallback = Callable[[str], None]
 WorkflowCallback = Callable[[dict], None]
+ChatCallback = Callable[[dict], None]
 
 _AID_ROOT = Path(__file__).resolve().parents[3]
 _CODING_AGENTS_DIR = _AID_ROOT / "coding agents"
@@ -51,6 +52,7 @@ def run_goal_on_repo(
     max_cycles: int = 3,
     on_log: LogCallback | None = None,
     on_workflow: WorkflowCallback | None = None,
+    on_chat: ChatCallback | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
     openhands_settings: dict[str, Any] | None = None,
 ) -> tuple[OpenHandsRunResult, dict | None]:
@@ -132,6 +134,9 @@ def run_goal_on_repo(
         elif event.get("type") == "workflow":
             if on_workflow:
                 on_workflow(event)
+        elif event.get("type") == "chat":
+            if on_chat:
+                on_chat(event)
         elif event.get("type") == "result":
             result_payload = event
             workflow_graph = event.get("workflow_graph")

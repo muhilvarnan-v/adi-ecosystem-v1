@@ -355,6 +355,7 @@ def run_workflow_for_repo(
     github_token: str | None = None,
     on_log: Callable[[str], None] | None = None,
     on_workflow: Callable[[dict[str, Any]], None] | None = None,
+    on_chat: Callable[[dict[str, Any]], None] | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
 ) -> tuple[RepoRunResult, dict[str, Any] | None]:
     """Run develop → review → test (cyclic) → deploy with per-role agent configs."""
@@ -421,6 +422,7 @@ def run_workflow_for_repo(
             pipeline_steps=pipeline_steps,
             on_log=on_log,
             on_workflow=on_workflow,
+            on_chat=on_chat,
             openhands_sandbox=openhands_sandbox,
         )
         result.repo = repo_url

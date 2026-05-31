@@ -14,6 +14,7 @@ from app.schemas.goal import (
     GoalUpdate,
     WorkflowGraph,
 )
+from app.schemas.goal_chat import GoalChatMessageCreate, GoalChatMessageResponse
 from app.services.firestore import get_firestore
 from app.schemas.goal import _normalize_workflow_roles as normalize_workflow_roles
 from app.services.goal_execution import (
@@ -34,6 +35,25 @@ from app.services.zendesk_oauth import ZendeskOAuthService
 from app.config import get_settings
 
 router = APIRouter(prefix="/goals", tags=["goals"])
+
+_VALID_CHAT_ROLES = frozenset({"user", "assistant", "system"})
+
+
+def _chat_row_to_response(row: dict) -> GoalChatMessageResponse:
+    raw_role = str(row.get("role") or "user").strip().lower()
+    role = raw_role if raw_role in _VALID_CHAT_ROLES else "user"
+    created = row.get("created_at")
+    if created is None:
+        from datetime import datetime, timezone
+
+        created = datetime.now(timezone.utc)
+    return GoalChatMessageResponse(
+        id=row["id"],
+        role=role,  # type: ignore[arg-type]
+        content=str(row.get("content") or ""),
+        metadata=row.get("metadata") if isinstance(row.get("metadata"), dict) else None,
+        created_at=created,
+    )
 
 
 def _find_workflow_definition(db, user_id: str, workflow_id: str) -> dict | None:
@@ -206,6 +226,39 @@ def create_goal(body: GoalCreate, user_id: str = Depends(get_user_id)):
     )
     schedule_goal_execution(row["id"], user_id)
     return _to_response(row)
+
+
+@router.get("/{goal_id}/chat", response_model=list[GoalChatMessageResponse])
+def list_goal_chat(goal_id: str, user_id: str = Depends(get_user_id)):
+    db = get_firestore()
+    if not db.get_goal(goal_id, user_id):
+        raise HTTPException(status_code=404, detail="Goal not found")
+    rows = db.list_goal_chat_messages(goal_id, user_id)
+    return [_chat_row_to_response(r) for r in rows]
+
+
+@router.post("/{goal_id}/chat", response_model=GoalChatMessageResponse, status_code=201)
+def append_goal_chat_user_message(
+    goal_id: str,
+    body: GoalChatMessageCreate,
+    user_id: str = Depends(get_user_id),
+):
+    db = get_firestore()
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message content is empty")
+    row = db.append_goal_chat_message(goal_id, user_id, role="user", content=content)
+    if not row:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    msg = _chat_row_to_response(row)
+    goal_run_manager.emit(
+        goal_id,
+        {
+            "type": "chat",
+            "chat_message": msg.model_dump(mode="json"),
+        },
+    )
+    return msg
 
 
 @router.get("/{goal_id}/stream")

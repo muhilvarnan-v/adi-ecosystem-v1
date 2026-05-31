@@ -54,6 +54,19 @@ https://github.com/your-org/repo-b
 ]
 ```
 
+## Goal chat (Harness / `run_goal.py`)
+
+When the backend runs `run_goal.py`, stdout is line-delimited JSON. Besides `log`, `workflow`, and `result`, you can emit **persisted chat** lines that appear in the goal’s Chat tab in the UI:
+
+```json
+{"type":"chat","role":"assistant","content":"Which API version should we target?","metadata":{"kind":"question"}}
+```
+
+- `role` must be `assistant` or `system` (the server rejects `user` from the runner).
+- The Harness backend stores the line on the goal and pushes it over the goal SSE stream.
+
+Multi-agent workflows also emit one assistant message per phase (summary and feedback) automatically.
+
 ## Notes
 
 - Repos are cloned locally into temporary workspaces, then each run uses OpenHands tools (`terminal`, `file editor`, `task tracker`).

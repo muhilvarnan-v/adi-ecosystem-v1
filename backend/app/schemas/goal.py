@@ -126,6 +126,7 @@ class WorkflowGraphNode(BaseModel):
     agent: str | None = None
     role: str | None = None
     summary: str | None = None
+    feedback: str | None = None
 
 
 class WorkflowGraphEdge(BaseModel):

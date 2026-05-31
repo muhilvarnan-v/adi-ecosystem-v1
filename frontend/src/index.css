@@ -202,6 +202,11 @@ a:hover {
   max-width: 1280px;
 }
 
+/* Goal run page: two-column workflow + chat needs more horizontal room */
+.main:has(.page-goal-execution) {
+  max-width: min(1680px, 100%);
+}
+
 .main:has(.harness-layout) {
   max-width: 1200px;
 }
@@ -617,6 +622,117 @@ textarea {
 .page-goals,
 .page-applications {
   max-width: none;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  margin: 0 0 0.35rem;
+  color: var(--muted);
+}
+
+.breadcrumb a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb-current {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.applications-table-wrap {
+  padding: 0;
+  overflow: hidden;
+}
+
+.applications-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.applications-table th,
+.applications-table td {
+  padding: 0.85rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.applications-table th {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: rgba(21, 19, 20, 0.03);
+}
+
+.applications-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.applications-table-numeric {
+  text-align: right;
+  white-space: nowrap;
+  width: 5rem;
+}
+
+.applications-table-actions {
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+}
+
+.applications-table-actions .btn {
+  margin-left: 0.35rem;
+}
+
+.applications-table-actions .btn:first-child {
+  margin-left: 0;
+}
+
+.applications-table-link {
+  font-weight: 600;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.applications-table-link:hover {
+  text-decoration: underline;
+}
+
+.applications-table-title {
+  min-width: 0;
+}
+
+.applications-table-desc {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  max-width: 36rem;
+}
+
+.applications-table-repo {
+  font-size: 0.8125rem;
+  max-width: 14rem;
+  word-break: break-word;
+}
+
+.applications-table-row-unassigned {
+  background: rgba(0, 61, 71, 0.04);
+}
+
+.application-detail-inline-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
 }
 
 .applications-list {
@@ -1338,9 +1454,96 @@ textarea {
 }
 
 .goal-execution-modal {
-  width: min(100%, 720px);
+  width: min(100%, 1000px);
   display: flex;
   flex-direction: column;
+}
+
+.goal-execution-page.goal-execution-modal {
+  width: 100%;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.goal-execution-page-card {
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  min-height: min(72vh, 840px);
+  min-width: 0;
+}
+
+.goal-execution-page-subtitle {
+  margin: 0 0 0.75rem;
+}
+
+.goal-execution-page-body {
+  display: grid;
+  /* Main workflow uses all space left after a modest fixed chat rail */
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 360px);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.goal-execution-page-chat-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: min(72vh, 840px);
+  padding: 1.25rem 1.5rem;
+}
+
+.goal-execution-page .goal-execution-page-main-panel.goal-execution-panel {
+  flex: 1;
+  min-height: 280px;
+  max-height: min(72vh, 840px);
+  margin-bottom: 0;
+}
+
+.goal-execution-page .goal-execution-page-main-panel .goal-execution-log {
+  max-height: min(72vh, 840px);
+}
+
+.goal-execution-chat-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.goal-execution-chat-panel-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.goal-execution-chat-panel-wrap .goal-chat-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .goal-execution-page-body {
+    grid-template-columns: 1fr;
+  }
+
+  .goal-execution-page-chat-card {
+    min-height: 0;
+    max-height: min(55vh, 520px);
+  }
+
+  .goal-execution-page .goal-execution-page-main-panel.goal-execution-panel {
+    max-height: min(50vh, 560px);
+  }
+}
+
+.goal-execution-page-error-back {
+  margin-top: 0.5rem;
 }
 
 .goal-execution-subtitle {
@@ -1426,8 +1629,103 @@ textarea {
   margin-bottom: 1rem;
 }
 
-.goal-execution-modal {
-  width: min(100%, 840px);
+.goal-execution-panel-chat {
+  display: flex;
+  flex-direction: column;
+  max-height: min(55vh, 520px);
+  overflow: hidden;
+}
+
+.goal-chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 0.75rem;
+}
+
+.goal-chat-intro {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.goal-chat-alert {
+  flex-shrink: 0;
+}
+
+.goal-chat-messages {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding-right: 0.25rem;
+}
+
+.goal-chat-bubble {
+  border-radius: var(--radius);
+  padding: 0.55rem 0.75rem;
+  max-width: 92%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.goal-chat-bubble-user {
+  align-self: flex-end;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.goal-chat-bubble-agent {
+  align-self: flex-start;
+}
+
+.goal-chat-bubble-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.goal-chat-role {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.goal-chat-bubble-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.goal-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.goal-chat-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 4rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.goal-chat-form .btn {
+  align-self: flex-end;
 }
 
 .workflow-graph-empty {
@@ -1505,7 +1803,35 @@ textarea {
 }
 
 .workflow-graph-node-failed {
-  border-color: rgba(191, 0, 0, 0.35);
+  border-width: 2px;
+  border-color: rgba(191, 0, 0, 0.75);
+  box-shadow: 0 0 0 1px rgba(191, 0, 0, 0.12);
+}
+
+.workflow-graph-node-failure {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(191, 0, 0, 0.06);
+  border: 1px solid rgba(191, 0, 0, 0.28);
+}
+
+.workflow-graph-node-failure-label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(140, 20, 20, 0.95);
+  margin-bottom: 0.25rem;
+}
+
+.workflow-graph-node-failure-text {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text);
+  word-break: break-word;
 }
 
 .workflow-graph-node-phase {
@@ -3387,6 +3713,25 @@ textarea {
   margin-top: 0.75rem;
 }
 
+.workflow-graph-v2 .workflow-graph-nodes-horizontal {
+  flex-wrap: nowrap;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-bottom: 0.5rem;
+  gap: 0;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.workflow-graph-v2 .workflow-graph-nodes-horizontal .workflow-graph-lane {
+  flex-shrink: 0;
+}
+
+.workflow-graph-v2 .workflow-graph-nodes-horizontal .workflow-graph-connector {
+  flex-shrink: 0;
+}
+
 .workflow-graph-lane {
   display: flex;
   align-items: center;
@@ -3397,6 +3742,20 @@ textarea {
   overflow: hidden;
   border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(21, 19, 20, 0.08);
+}
+
+.workflow-graph-v2 .workflow-graph-node-running {
+  background: rgba(0, 127, 170, 0.12);
+  border-color: rgba(0, 100, 140, 0.42);
+}
+
+.workflow-graph-v2 .workflow-graph-node-passed {
+  background: rgba(107, 158, 120, 0.14);
+  border-color: rgba(47, 109, 63, 0.38);
+}
+
+.workflow-graph-v2 .workflow-graph-node-pending {
+  background: rgba(247, 250, 252, 0.98);
 }
 
 .workflow-graph-node-glow {
@@ -3417,7 +3776,19 @@ textarea {
   z-index: 1;
 }
 
+.workflow-graph-v2 .workflow-graph-node-failed {
+  background: rgba(191, 40, 40, 0.09);
+  border-width: 2px;
+  border-color: rgba(180, 35, 35, 0.95);
+  box-shadow: 0 0 0 2px rgba(180, 35, 35, 0.14);
+}
+
 .workflow-graph-v2 .workflow-graph-node-summary {
+  position: relative;
+  z-index: 1;
+}
+
+.workflow-graph-v2 .workflow-graph-node-failure {
   position: relative;
   z-index: 1;
 }
@@ -3445,6 +3816,156 @@ textarea {
   transform: translateY(-50%);
   border: 6px solid transparent;
   border-left-color: rgba(0, 61, 71, 0.85);
+}
+
+.workflow-graph-cycle-intro {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}
+
+.workflow-graph-cycle-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.workflow-graph-cycle-tab {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.workflow-graph-cycle-tab:hover {
+  filter: brightness(1.03);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-running {
+  background: rgba(0, 127, 170, 0.22);
+  border-color: rgba(0, 95, 135, 0.5);
+  color: var(--text);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-passed {
+  background: rgba(107, 158, 120, 0.28);
+  border-color: rgba(47, 109, 63, 0.48);
+  color: var(--text);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-failed {
+  background: rgba(200, 60, 60, 0.2);
+  border-color: rgba(160, 40, 40, 0.55);
+  color: var(--text);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-pending {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.workflow-graph-cycle-tab--final {
+  box-shadow: inset 0 0 0 1px rgba(47, 109, 63, 0.12);
+}
+
+.workflow-graph-cycle-tab.is-active {
+  box-shadow: 0 0 0 2px rgba(0, 61, 71, 0.35);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-running.is-active {
+  box-shadow: 0 0 0 2px rgba(0, 100, 140, 0.45);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-passed.is-active {
+  box-shadow: 0 0 0 2px rgba(47, 109, 63, 0.45);
+}
+
+.workflow-graph-cycle-tab.workflow-graph-cycle-tab--tone-failed.is-active {
+  box-shadow: 0 0 0 2px rgba(160, 40, 40, 0.5);
+}
+
+.workflow-graph-cycle-panel {
+  margin-top: 0.25rem;
+  padding: 0.75rem 0 0.25rem;
+  border-top: 1px solid rgba(0, 61, 71, 0.12);
+}
+
+.workflow-graph-cycle-panel-caption {
+  margin: 0 0 0.65rem;
+}
+
+.workflow-graph-hint-cycles {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(0, 61, 71, 0.15);
+}
+
+.workflow-timeline-intro {
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}
+
+.workflow-timeline-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.workflow-timeline-section {
+  margin: 0;
+  padding: 0 0 0 0.35rem;
+  border-left: 3px solid rgba(0, 61, 71, 0.12);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.workflow-timeline-section-includes-deploy {
+  border-left-color: rgba(60, 120, 75, 0.45);
+  background: linear-gradient(90deg, rgba(107, 158, 120, 0.08), transparent 42%);
+}
+
+.workflow-timeline-section-header {
+  margin-bottom: 0.5rem;
+  padding-left: 0.35rem;
+}
+
+.workflow-timeline-section-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.workflow-timeline-section-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.45rem;
+  border-radius: 99px;
+  font-weight: 600;
+}
+
+.workflow-timeline-section-subtitle {
+  margin: 0.25rem 0 0;
+  max-width: 52ch;
+  line-height: 1.4;
+}
+
+.workflow-timeline-nested {
+  padding-left: 0.25rem;
+}
+
+.workflow-timeline-nested .workflow-timeline-item {
+  padding-left: 0;
 }
 
 /* Timeline v2 */

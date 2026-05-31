@@ -1,14 +1,23 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { HarnessLayout } from './components/HarnessLayout';
 import { Layout } from './components/Layout';
 import { AgentsPage } from './pages/AgentsPage';
 import { LlmsPage } from './pages/LlmsPage';
 import { WorkspacesPage } from './pages/WorkspacesPage';
 import { ApplicationsPage } from './pages/ApplicationsPage';
+import { ApplicationDetailPage } from './pages/ApplicationDetailPage';
+import { GoalExecutionPage } from './pages/GoalExecutionPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { McpServersPage } from './pages/McpServersPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
+
+function LegacyGoalUrlRedirect() {
+  const { goalId } = useParams<{ applicationId: string; goalId: string }>();
+  const gid = goalId?.trim();
+  if (!gid) return <Navigate to="/" replace />;
+  return <Navigate to={`/goals/${encodeURIComponent(gid)}`} replace />;
+}
 
 function App() {
   return (
@@ -16,6 +25,9 @@ function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<ApplicationsPage />} />
+          <Route path="goals/:goalId" element={<GoalExecutionPage />} />
+          <Route path="applications/:applicationId/goals/:goalId" element={<LegacyGoalUrlRedirect />} />
+          <Route path="applications/:applicationId" element={<ApplicationDetailPage />} />
           <Route path="workflows" element={<WorkflowsPage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="llm" element={<LlmsPage />} />

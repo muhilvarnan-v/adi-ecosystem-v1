@@ -1,18 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { getGoal, resumeGoal } from '../api/goals';
-import { streamGoalExecution, type GoalStreamEvent } from '../api/goals';
+import { Link } from 'react-router-dom';
+import { getGoal, resumeGoal, streamGoalExecution, type GoalStreamEvent } from '../api/goals';
 import { timelineFromGraph } from '../lib/workflowTimeline';
-import type { Goal, WorkflowGraph, WorkflowTimelineEntry } from '../types';
+import type { Goal, GoalChatMessage, WorkflowGraph, WorkflowTimelineEntry } from '../types';
+import { GoalChatPanel } from './GoalChatPanel';
 import { GoalWorkflowGraph } from './GoalWorkflowGraph';
 import { GoalWorkflowTimeline } from './GoalWorkflowTimeline';
 
-interface GoalExecutionModalProps {
+export interface GoalExecutionViewProps {
   goal: Goal;
-  onClose: () => void;
   onGoalUpdate: (goal: Goal) => void;
+  variant: 'modal' | 'page';
+  /** Required when variant is modal (close button, overlay dismiss, footer). */
+  onClose?: () => void;
+  /** Required when variant is page — primary navigation back to the goal board. */
+  backTo?: string;
+  /**
+   * When variant is `page`, stream chat events are forwarded here so chat can render
+   * outside this component (e.g. a sibling card). Modal variant uses internal state instead.
+   */
+  onStreamChat?: (message: GoalChatMessage | null) => void;
 }
 
-type ViewTab = 'graph' | 'timeline' | 'logs';
+type ViewTab = 'graph' | 'timeline' | 'logs' | 'chat';
+
+function mainTabForPanel(variant: 'modal' | 'page', tab: ViewTab): ViewTab {
+  if (variant === 'page' && tab === 'chat') return 'timeline';
+  return tab;
+}
 
 function isTerminalExecution(status: Goal['execution_status']): boolean {
   return status === 'completed' || status === 'failed';
@@ -37,6 +52,7 @@ function upsertGraphNode(
       agent: patch.agent,
       role: patch.role,
       summary: patch.summary,
+      feedback: patch.feedback,
     });
   }
   return { nodes, edges: base.edges };
@@ -73,6 +89,7 @@ function applyWorkflowEvent(
         status: event.status ?? 'failed',
         agent: event.agent,
         summary: event.summary,
+        feedback: event.feedback,
       }),
     );
   }
@@ -106,7 +123,14 @@ function applyWorkflowEvent(
   }
 }
 
-export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutionModalProps) {
+export function GoalExecutionView({
+  goal,
+  onGoalUpdate,
+  variant,
+  onClose,
+  backTo,
+  onStreamChat,
+}: GoalExecutionViewProps) {
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<string>(goal.execution_status ?? 'starting');
   const [error, setError] = useState<string | null>(goal.execution_error);
@@ -124,6 +148,7 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
       ? timelineFromGraph(goal.workflow_graph ?? null)
       : [],
   );
+  const [streamChat, setStreamChat] = useState<GoalChatMessage | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
   const isWorkflow = useMemo(
@@ -132,10 +157,16 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
   );
 
   useEffect(() => {
-    if (logRef.current && tab === 'logs') {
+    if (variant === 'page') onStreamChat?.(null);
+    else setStreamChat(null);
+  }, [goal.id, variant, onStreamChat]);
+
+  useEffect(() => {
+    const panelTab = mainTabForPanel(variant, tab);
+    if (logRef.current && panelTab === 'logs') {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [lines, tab]);
+  }, [lines, tab, variant]);
 
   const handleResume = useCallback(async () => {
     setResuming(true);
@@ -144,6 +175,8 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
     setStatus('running');
     setLines(['Retrying agent run…']);
     setTimeline([]);
+    if (variant === 'page') onStreamChat?.(null);
+    else setStreamChat(null);
     try {
       const updated = await resumeGoal(goal.id);
       setResumable(updated.resumable);
@@ -153,7 +186,7 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
       setError(e instanceof Error ? e.message : 'Failed to resume goal');
       setResuming(false);
     }
-  }, [goal.id, onGoalUpdate]);
+  }, [goal.id, onGoalUpdate, onStreamChat, variant]);
 
   useEffect(() => {
     if (!goal.workflow_graph?.nodes?.length) return;
@@ -189,6 +222,10 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
         setError(event.message);
         appendLine(`[error] ${event.message}`);
       }
+      if (event.type === 'chat' && event.chat_message) {
+        if (variant === 'page') onStreamChat?.(event.chat_message);
+        else setStreamChat(event.chat_message);
+      }
       if (event.type === 'complete') {
         setFinished(true);
         setResuming(false);
@@ -210,17 +247,81 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
 
     const stop = streamGoalExecution(goal.id, handleEvent);
     return stop;
-  }, [goal.id, onGoalUpdate, streamEpoch]);
+  }, [goal.id, onGoalUpdate, streamEpoch, variant, onStreamChat]);
+
+  const rootClass =
+    variant === 'page' ? 'goal-execution-page goal-execution-modal' : 'goal-execution-modal';
+  const panelTab = mainTabForPanel(variant, tab);
+
+  const mainTabs = (
+    <div className="goal-execution-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={panelTab === 'graph'}
+        className={panelTab === 'graph' ? 'active' : ''}
+        onClick={() => setTab('graph')}
+      >
+        Graph
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={panelTab === 'timeline'}
+        className={panelTab === 'timeline' ? 'active' : ''}
+        onClick={() => setTab('timeline')}
+      >
+        Timeline
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={panelTab === 'logs'}
+        className={panelTab === 'logs' ? 'active' : ''}
+        onClick={() => setTab('logs')}
+      >
+        Logs
+      </button>
+      {variant === 'modal' && (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'chat'}
+          className={tab === 'chat' ? 'active' : ''}
+          onClick={() => setTab('chat')}
+        >
+          Chat
+        </button>
+      )}
+    </div>
+  );
+
+  const mainPanel = (
+    <div
+      className={
+        variant === 'modal' && tab === 'chat'
+          ? 'goal-execution-panel goal-execution-panel-chat'
+          : variant === 'page'
+            ? 'goal-execution-panel goal-execution-page-main-panel'
+            : 'goal-execution-panel'
+      }
+    >
+      {panelTab === 'graph' && <GoalWorkflowGraph graph={workflowGraph} />}
+      {panelTab === 'timeline' && <GoalWorkflowTimeline entries={timeline} />}
+      {panelTab === 'logs' && (
+        <pre ref={logRef} className="goal-execution-log" aria-live="polite">
+          {lines.length === 0 ? 'Waiting for agent logs…' : lines.join('\n')}
+        </pre>
+      )}
+      {variant === 'modal' && tab === 'chat' && (
+        <GoalChatPanel goalId={goal.id} streamChat={streamChat} />
+      )}
+    </div>
+  );
 
   return (
-    <div className="modal-overlay" role="presentation" onClick={onClose}>
-      <div
-        className="modal modal-lg goal-execution-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="goal-execution-title"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div className={rootClass}>
+      {variant === 'modal' && onClose && (
         <div className="modal-header">
           <div>
             <h2 id="goal-execution-title">{goal.title}</h2>
@@ -229,82 +330,62 @@ export function GoalExecutionModal({ goal, onClose, onGoalUpdate }: GoalExecutio
               <span className={`execution-status execution-status-${status}`}>{status}</span>
             </p>
           </div>
-          <button
-            type="button"
-            className="modal-close"
-            onClick={onClose}
-            aria-label="Close"
-            title="Close"
-          >
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close" title="Close">
             ×
           </button>
         </div>
+      )}
 
-        <div className="goal-execution-tabs" role="tablist">
+      {variant === 'page' && (
+        <p className="muted small goal-execution-subtitle goal-execution-page-subtitle">
+          {isWorkflow ? 'Multi-agent workflow' : 'Coding agent'} ·{' '}
+          <span className={`execution-status execution-status-${status}`}>{status}</span>
+        </p>
+      )}
+
+      {variant === 'page' ? (
+        <>
+          {mainTabs}
+          {mainPanel}
+        </>
+      ) : (
+        <>
+          {mainTabs}
+          {mainPanel}
+        </>
+      )}
+
+      {error && <div className="alert alert-error">{error}</div>}
+
+      {prUrl && (
+        <p className="goal-execution-pr">
+          <a href={prUrl} target="_blank" rel="noreferrer">
+            View pull request
+          </a>
+        </p>
+      )}
+
+      <div className="modal-actions">
+        {resumable && finished && (
           <button
             type="button"
-            role="tab"
-            aria-selected={tab === 'graph'}
-            className={tab === 'graph' ? 'active' : ''}
-            onClick={() => setTab('graph')}
+            className="btn btn-secondary"
+            disabled={resuming}
+            onClick={() => void handleResume()}
           >
-            Graph
+            {resuming ? 'Retrying…' : 'Retry agent run'}
           </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'timeline'}
-            className={tab === 'timeline' ? 'active' : ''}
-            onClick={() => setTab('timeline')}
-          >
-            Timeline
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'logs'}
-            className={tab === 'logs' ? 'active' : ''}
-            onClick={() => setTab('logs')}
-          >
-            Logs
-          </button>
-        </div>
-
-        <div className="goal-execution-panel">
-          {tab === 'graph' && <GoalWorkflowGraph graph={workflowGraph} />}
-          {tab === 'timeline' && <GoalWorkflowTimeline entries={timeline} />}
-          {tab === 'logs' && (
-            <pre ref={logRef} className="goal-execution-log" aria-live="polite">
-              {lines.length === 0 ? 'Waiting for agent logs…' : lines.join('\n')}
-            </pre>
-          )}
-        </div>
-
-        {error && <div className="alert alert-error">{error}</div>}
-
-        {prUrl && (
-          <p className="goal-execution-pr">
-            <a href={prUrl} target="_blank" rel="noreferrer">
-              View pull request
-            </a>
-          </p>
         )}
-
-        <div className="modal-actions">
-          {resumable && finished && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={resuming}
-              onClick={() => void handleResume()}
-            >
-              {resuming ? 'Retrying…' : 'Retry agent run'}
-            </button>
-          )}
+        {variant === 'modal' && onClose && (
           <button type="button" className="btn btn-primary" onClick={onClose}>
             {finished ? 'Close' : 'Run in background'}
           </button>
-        </div>
+        )}
+        {variant === 'page' && backTo && (
+          <Link to={backTo} className="btn btn-primary">
+            Back to board
+          </Link>
+        )}
       </div>
     </div>
   );

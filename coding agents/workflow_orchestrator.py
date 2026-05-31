@@ -67,6 +67,7 @@ class PhaseOutcome:
 
 EmitWorkflow = Callable[[dict[str, Any]], None]
 EmitLog = Callable[[str], None]
+EmitChat = Callable[[dict[str, Any]], None]
 
 
 def _emit_workflow(on_workflow: EmitWorkflow | None, payload: dict[str, Any]) -> None:
@@ -77,6 +78,11 @@ def _emit_workflow(on_workflow: EmitWorkflow | None, payload: dict[str, Any]) ->
 def _emit_log(on_log: EmitLog | None, line: str) -> None:
     if on_log:
         on_log(line)
+
+
+def _emit_chat(on_chat: EmitChat | None, payload: dict[str, Any]) -> None:
+    if on_chat:
+        on_chat(payload)
 
 
 def parse_phase_result(path: Path) -> tuple[str, str | None, str | None]:
@@ -272,6 +278,7 @@ def run_phase(
     feedback: str | None,
     on_log: EmitLog | None,
     on_workflow: EmitWorkflow | None,
+    on_chat: EmitChat | None = None,
     graph: WorkflowGraph,
     openhands_sandbox: dict[str, Any] | None = None,
 ) -> PhaseOutcome:
@@ -387,6 +394,7 @@ def run_phase(
         if node.get("id") == node_id:
             node["status"] = outcome.status
             node["summary"] = outcome.summary
+            node["feedback"] = outcome.feedback
             break
 
     _emit_workflow(
@@ -408,6 +416,28 @@ def run_phase(
         f"── {phase.value} finished: {outcome.status}"
         + (f" — {outcome.summary}" if outcome.summary else ""),
     )
+    if on_chat:
+        parts = [
+            f"{role.display_name} — {phase.value} (cycle {cycle}): {outcome.status}",
+        ]
+        if outcome.summary:
+            parts.append(outcome.summary)
+        if outcome.feedback:
+            parts.append(f"Feedback: {outcome.feedback}")
+        _emit_chat(
+            on_chat,
+            {
+                "type": "chat",
+                "role": "assistant",
+                "content": "\n\n".join(parts),
+                "metadata": {
+                    "phase": phase.value,
+                    "cycle": cycle,
+                    "agent": role.display_name,
+                    "status": outcome.status,
+                },
+            },
+        )
     return outcome
 
 
@@ -424,6 +454,7 @@ def run_implementation_workflow(
     pipeline_steps: list[str] | None = None,
     on_log: EmitLog | None = None,
     on_workflow: EmitWorkflow | None = None,
+    on_chat: EmitChat | None = None,
     openhands_sandbox: dict[str, Any] | None = None,
 ) -> tuple[RepoRunResult, WorkflowGraph]:
     graph = WorkflowGraph()
@@ -479,6 +510,7 @@ def run_implementation_workflow(
                 feedback=feedback if phase == WorkflowPhase.DEVELOP else None,
                 on_log=on_log,
                 on_workflow=on_workflow,
+                on_chat=on_chat,
                 graph=graph,
                 openhands_sandbox=openhands_sandbox,
             )
@@ -569,6 +601,7 @@ def run_implementation_workflow(
         feedback=None,
         on_log=on_log,
         on_workflow=on_workflow,
+        on_chat=on_chat,
         graph=graph,
         openhands_sandbox=openhands_sandbox,
     )

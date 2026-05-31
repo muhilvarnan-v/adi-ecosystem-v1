@@ -1,7 +1,13 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AgentIcon, HarnessIcon, LlmIcon, SparklesIcon, TargetIcon, WorkflowIcon } from './Icons';
 
 export function Layout() {
+  const location = useLocation();
+  const applicationsNavActive =
+    location.pathname === '/' ||
+    location.pathname.startsWith('/applications') ||
+    location.pathname.startsWith('/goals');
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -15,7 +21,10 @@ export function Layout() {
           </div>
         </div>
         <nav className="nav">
-          <NavLink to="/" end className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
+          <NavLink
+            to="/"
+            className={applicationsNavActive ? 'nav-link active' : 'nav-link'}
+          >
             <TargetIcon />
             Applications
           </NavLink>
