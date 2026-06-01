@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   disconnectIntegration,
+  connectCircleCI,
   listIntegrations,
   startGitHubOAuth,
   startJiraOAuth,
   startTrelloOAuth,
   startZendeskOAuth,
 } from '../api/integrations';
-import { GitHubIcon, JiraIcon, PlugIcon, TrelloIcon, ZendeskIcon } from '../components/Icons';
+import { GitHubIcon, JiraIcon, PlugIcon, TrelloIcon, ZendeskIcon, CircleCIIcon } from '../components/Icons';
 import type { IntegrationProvider, IntegrationStatus } from '../types';
 
 function LoadingIndicator() {
@@ -26,6 +27,7 @@ const PROVIDER_ICONS: Record<IntegrationProvider, typeof JiraIcon> = {
   trello: TrelloIcon,
   github: GitHubIcon,
   zendesk: ZendeskIcon,
+  circleci: CircleCIIcon,
 };
 
 export function IntegrationsPage() {
@@ -70,7 +72,13 @@ export function IntegrationsPage() {
     try {
       if (provider === 'jira') await startJiraOAuth();
       else if (provider === 'trello') await startTrelloOAuth();
-      else if (provider === 'zendesk') {
+      else if (provider === 'circleci') {
+        const res = await connectCircleCI();
+        setMessage(
+          `CircleCI connected. Add this outbound webhook URL in CircleCI (Project Settings → Webhooks): ${res.webhook_url}`,
+        );
+        await load();
+      } else if (provider === 'zendesk') {
         const subdomain = zendeskSubdomain.trim();
         if (!subdomain) {
           setError('Enter your Zendesk subdomain (e.g. your-company from your-company.zendesk.com).');
@@ -127,6 +135,13 @@ export function IntegrationsPage() {
         'Link applications to a GitHub repository and import skills from repos into GCP Skill Registry.',
       authNote: 'OAuth 2.0',
     },
+    {
+      id: 'circleci',
+      name: 'CircleCI',
+      description:
+        'Receive outbound webhooks when workflows or jobs fail, and open self-healing goals for matching applications.',
+      authNote: 'Inbound webhook (token)',
+    },
   ];
 
   return (
@@ -134,8 +149,8 @@ export function IntegrationsPage() {
       <div className="page-header">
         <h1>Integrations</h1>
         <p className="muted">
-          Connect Jira, Trello, and Zendesk to import goals, and GitHub to link application repositories
-          and import skills.
+          Connect Jira, Trello, and Zendesk to import goals, GitHub to link application repositories and import
+          skills, and CircleCI to trigger self-healing when pipelines fail.
         </p>
       </div>
 

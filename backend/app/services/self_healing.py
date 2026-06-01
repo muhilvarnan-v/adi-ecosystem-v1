@@ -8,7 +8,13 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.schemas.goal import GoalExecutionStatus, GoalStatus
-from app.schemas.self_healing import SelfHealingIncident, ZendeskWebhookResult
+from app.schemas.self_healing import CircleCIWebhookResult, SelfHealingIncident, ZendeskWebhookResult
+from app.services.circleci_goal import (
+    application_matches_circleci_repo,
+    create_circleci_goal_from_failure_event,
+    parse_circleci_failure,
+    repo_url_from_circleci_payload,
+)
 from app.services.zendesk_goal import create_zendesk_goal_from_ticket_fields
 from app.services.zendesk_oauth import ZendeskOAuthService
 
@@ -107,6 +113,7 @@ def _incident_from_ticket(
         goal_status=_goal_status(linked_goal),
         execution_status=_goal_execution_status(linked_goal),
         pr_url=linked_goal.get("pr_url") if linked_goal else None,
+        kind="support",
     )
 
 
@@ -271,6 +278,126 @@ async def handle_zendesk_webhook(db, payload: dict[str, Any]) -> ZendeskWebhookR
                     triggered_goals += 1
 
     return ZendeskWebhookResult(
+        matched_applications=matched_apps,
+        triggered_goals=triggered_goals,
+        goals=goals,
+        received_at=datetime.now(timezone.utc),
+    )
+
+
+def _incident_from_circleci_goal(goal: dict[str, Any]) -> SelfHealingIncident:
+    gid = str(goal.get("id") or "")
+    return SelfHealingIncident(
+        id=gid,
+        key=goal.get("external_id"),
+        title=str(goal.get("title") or "CircleCI failure"),
+        description=str(goal.get("description") or ""),
+        url=goal.get("external_url"),
+        status=None,
+        priority=None,
+        goal_id=gid or None,
+        goal_status=_goal_status(goal),
+        execution_status=_goal_execution_status(goal),
+        pr_url=goal.get("pr_url"),
+        kind="ci_cd",
+    )
+
+
+def list_application_ci_incidents(db, user_id: str, application_id: str) -> list[SelfHealingIncident]:
+    app = db.get_application(application_id, user_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if not db.get_integration(user_id, "circleci"):
+        raise HTTPException(
+            status_code=400,
+            detail="CircleCI is not connected. Connect it in Integrations, then add the outbound webhook in CircleCI.",
+        )
+    rows = [
+        g
+        for g in db.list_goals(user_id, application_id=application_id)
+        if str(g.get("source") or "") == "circleci"
+    ]
+    return [_incident_from_circleci_goal(g) for g in rows]
+
+
+def handle_circleci_webhook(
+    db,
+    *,
+    webhook_token: str,
+    circleci_event_type: str | None,
+    payload: dict[str, Any],
+) -> CircleCIWebhookResult:
+    token = webhook_token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing webhook token query parameter.")
+    integrations = db.list_circleci_integrations_by_webhook_token(token)
+    if not integrations:
+        raise HTTPException(status_code=404, detail="Unknown CircleCI webhook token.")
+
+    parsed = parse_circleci_failure(payload, circleci_event_type or "")
+    if not parsed:
+        return CircleCIWebhookResult(
+            matched_applications=0,
+            triggered_goals=0,
+            goals=[],
+            received_at=datetime.now(timezone.utc),
+            ignored=True,
+            ignore_reason="Not a failed workflow-completed or job-completed event.",
+        )
+
+    repo_url = repo_url_from_circleci_payload(payload)
+    if not repo_url:
+        return CircleCIWebhookResult(
+            matched_applications=0,
+            triggered_goals=0,
+            goals=[],
+            received_at=datetime.now(timezone.utc),
+            ignored=True,
+            ignore_reason="Missing VCS repository URL on the pipeline.",
+        )
+
+    external_id, title, description, external_url = parsed
+    matched_apps = 0
+    triggered_goals = 0
+    goals: list[dict[str, Any]] = []
+
+    for integration in integrations:
+        user_id = integration.get("user_id")
+        if not user_id:
+            continue
+        for app in db.list_self_healing_applications(str(user_id)):
+            if not application_matches_circleci_repo(app, repo_url):
+                continue
+            workflow_id = _resolve_self_healing_workflow_id(db, str(user_id), app)
+            if not workflow_id:
+                continue
+            matched_apps += 1
+            row = create_circleci_goal_from_failure_event(
+                db,
+                user_id=str(user_id),
+                application_id=str(app["id"]),
+                workflow_id=workflow_id,
+                external_id=external_id,
+                title=title,
+                description=description,
+                external_url=external_url,
+                workflow_roles={},
+                dedupe=True,
+            )
+            if row:
+                goals.append(
+                    {
+                        "id": row["id"],
+                        "application_id": row.get("application_id"),
+                        "external_id": row.get("external_id"),
+                        "execution_status": row.get("execution_status"),
+                        "pr_url": row.get("pr_url"),
+                    }
+                )
+                if row.get("execution_status") in {"queued", "running"}:
+                    triggered_goals += 1
+
+    return CircleCIWebhookResult(
         matched_applications=matched_apps,
         triggered_goals=triggered_goals,
         goals=goals,

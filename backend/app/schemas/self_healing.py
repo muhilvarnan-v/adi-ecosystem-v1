@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ class SelfHealingIncident(BaseModel):
     goal_status: GoalStatus | None = None
     execution_status: GoalExecutionStatus | None = None
     pr_url: str | None = None
+    kind: Literal["support", "ci_cd"] = "support"
 
 
 class ZendeskWebhookResult(BaseModel):
@@ -25,3 +26,12 @@ class ZendeskWebhookResult(BaseModel):
     triggered_goals: int = 0
     goals: list[dict[str, Any]] = Field(default_factory=list)
     received_at: datetime
+
+
+class CircleCIWebhookResult(BaseModel):
+    matched_applications: int = 0
+    triggered_goals: int = 0
+    goals: list[dict[str, Any]] = Field(default_factory=list)
+    received_at: datetime
+    ignored: bool = False
+    ignore_reason: str | None = None

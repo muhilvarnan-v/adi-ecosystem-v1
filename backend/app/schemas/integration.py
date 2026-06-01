@@ -9,6 +9,7 @@ class IntegrationProvider(str, Enum):
     TRELLO = "trello"
     GITHUB = "github"
     ZENDESK = "zendesk"
+    CIRCLECI = "circleci"
 
 
 class IntegrationStatus(BaseModel):
@@ -16,6 +17,11 @@ class IntegrationStatus(BaseModel):
     connected: bool
     connected_at: datetime | None = None
     account_label: str | None = None
+
+
+class CircleCIConnectResponse(BaseModel):
+    webhook_url: str
+    setup_note: str
 
 
 class JiraSpacePreview(BaseModel):

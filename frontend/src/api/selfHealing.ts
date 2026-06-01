@@ -6,3 +6,9 @@ export function listSelfHealingIncidents(applicationId: string) {
     `/api/applications/${applicationId}/self-healing/incidents`,
   );
 }
+
+export function listSelfHealingCiFailures(applicationId: string) {
+  return api.get<SelfHealingIncident[]>(
+    `/api/applications/${applicationId}/self-healing/ci-failures`,
+  );
+}

@@ -511,6 +511,7 @@ textarea {
   background: var(--success-bg);
   border: 1px solid rgba(47, 109, 63, 0.25);
   color: #2f6d3f;
+  overflow-wrap: anywhere;
 }
 
 /* Tabs */
@@ -3126,6 +3127,10 @@ textarea {
   background: linear-gradient(90deg, #2f6d3f, #6b9e78);
 }
 
+.integration-card-circleci::before {
+  background: linear-gradient(90deg, #161616, #343434);
+}
+
 .integration-card-header {
   display: flex;
   align-items: center;
@@ -3172,6 +3177,11 @@ textarea {
 .integration-icon-zendesk {
   background: rgba(107, 158, 120, 0.18);
   color: #2f6d3f;
+}
+
+.integration-icon-circleci {
+  background: rgba(52, 52, 52, 0.12);
+  color: #161616;
 }
 
 .integration-subdomain-field {

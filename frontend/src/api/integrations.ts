@@ -52,3 +52,7 @@ export function listZendeskTickets() {
 export function listGitHubRepos() {
   return api.get<GitHubRepo[]>('/api/integrations/github/repos');
 }
+
+export function connectCircleCI() {
+  return api.post<{ webhook_url: string; setup_note: string }>('/api/integrations/circleci/connect', {});
+}

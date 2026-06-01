@@ -26,7 +26,7 @@ export interface Application {
   updated_at: string;
 }
 
-export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk';
+export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk' | 'circleci';
 export type GoalStatus = 'backlog' | 'in_progress' | 'done';
 
 export type GoalExecutionStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -101,7 +101,7 @@ export interface GoalChatMessage {
   created_at: string;
 }
 
-export type IntegrationProvider = 'jira' | 'trello' | 'github' | 'zendesk';
+export type IntegrationProvider = 'jira' | 'trello' | 'github' | 'zendesk' | 'circleci';
 
 export interface IntegrationStatus {
   provider: IntegrationProvider;
@@ -134,6 +134,8 @@ export interface ExternalCard {
   board_name: string | null;
 }
 
+export type SelfHealingIncidentKind = 'support' | 'ci_cd';
+
 export interface SelfHealingIncident {
   id: string;
   key: string | null;
@@ -146,6 +148,8 @@ export interface SelfHealingIncident {
   goal_status: GoalStatus | null;
   execution_status: GoalExecutionStatus | null;
   pr_url: string | null;
+  /** Support tickets (Zendesk) vs CI/CD pipeline failures (CircleCI). */
+  kind?: SelfHealingIncidentKind;
 }
 
 export type SkillSource = 'manual' | 'github';

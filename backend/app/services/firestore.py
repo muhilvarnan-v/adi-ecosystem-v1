@@ -398,6 +398,19 @@ class FirestoreService:
             results.append(row)
         return results
 
+    def list_circleci_integrations_by_webhook_token(self, webhook_token: str) -> list[dict[str, Any]]:
+        query = (
+            self._db.collection(INTEGRATIONS_COLLECTION)
+            .where(filter=firestore.FieldFilter("provider", "==", "circleci"))
+            .where(filter=firestore.FieldFilter("tokens.webhook_token", "==", webhook_token))
+        )
+        results = []
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            results.append(row)
+        return results
+
     # --- Skills (GCP Skill Registry metadata) ---
 
     def create_skill(

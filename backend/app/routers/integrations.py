@@ -1,3 +1,4 @@
+import secrets
 import time
 from urllib.parse import urlencode
 
@@ -7,6 +8,7 @@ from fastapi.responses import RedirectResponse
 from app.config import get_settings
 from app.dependencies import get_user_id
 from app.schemas.integration import (
+    CircleCIConnectResponse,
     ExternalCardPreview,
     ExternalIssuePreview,
     IntegrationProvider,
@@ -54,6 +56,32 @@ def list_integrations(user_id: str = Depends(get_user_id)):
             )
         )
     return result
+
+
+@router.post("/circleci/connect", response_model=CircleCIConnectResponse)
+def connect_circleci(user_id: str = Depends(get_user_id)):
+    """Register an inbound webhook token; add the returned URL in CircleCI project webhooks."""
+    db = get_firestore()
+    token = secrets.token_urlsafe(32)
+    settings = get_settings()
+    base = settings.oauth_redirect_base.rstrip("/")
+    webhook_url = f"{base}/api/self-healing/circleci/webhook?token={token}"
+    db.save_integration(
+        user_id,
+        IntegrationProvider.CIRCLECI.value,
+        {"webhook_token": token},
+        "CircleCI",
+    )
+    return CircleCIConnectResponse(
+        webhook_url=webhook_url,
+        setup_note=(
+            "In CircleCI: open your project → Project Settings → Webhooks → Add Webhook. "
+            "Paste the webhook URL, then under 'Webhook events' enable at least "
+            "'workflow-completed' and/or 'job-completed'. "
+            "When a workflow or job fails, we create a self-healing goal for each application "
+            "that has Auto fix enabled and whose linked GitHub repository matches the pipeline repository."
+        ),
+    )
 
 
 @router.delete("/{provider}", status_code=204)

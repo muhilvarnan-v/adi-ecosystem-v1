@@ -1,11 +1,20 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from app.dependencies import get_user_id
-from app.schemas.self_healing import SelfHealingIncident, ZendeskWebhookResult
+from app.schemas.self_healing import (
+    CircleCIWebhookResult,
+    SelfHealingIncident,
+    ZendeskWebhookResult,
+)
 from app.services.firestore import get_firestore
-from app.services.self_healing import handle_zendesk_webhook, list_application_incidents
+from app.services.self_healing import (
+    handle_circleci_webhook,
+    handle_zendesk_webhook,
+    list_application_ci_incidents,
+    list_application_incidents,
+)
 
 router = APIRouter(tags=["self-healing"])
 
@@ -19,7 +28,32 @@ async def list_incidents(application_id: str, user_id: str = Depends(get_user_id
     return await list_application_incidents(db, user_id, application_id)
 
 
+@router.get(
+    "/applications/{application_id}/self-healing/ci-failures",
+    response_model=list[SelfHealingIncident],
+)
+def list_ci_failures(application_id: str, user_id: str = Depends(get_user_id)):
+    db = get_firestore()
+    return list_application_ci_incidents(db, user_id, application_id)
+
+
 @router.post("/self-healing/zendesk/webhook", response_model=ZendeskWebhookResult)
 async def zendesk_webhook(payload: dict[str, Any]):
     db = get_firestore()
     return await handle_zendesk_webhook(db, payload)
+
+
+@router.post("/self-healing/circleci/webhook", response_model=CircleCIWebhookResult)
+async def circleci_webhook(
+    request: Request,
+    token: str = Query(..., min_length=1),
+    payload: dict[str, Any] = Body(default_factory=dict),
+):
+    db = get_firestore()
+    event_type = request.headers.get("circleci-event-type") or request.headers.get("Circleci-Event-Type")
+    return handle_circleci_webhook(
+        db,
+        webhook_token=token,
+        circleci_event_type=event_type,
+        payload=payload,
+    )

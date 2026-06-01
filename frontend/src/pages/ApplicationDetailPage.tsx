@@ -29,7 +29,7 @@ import {
   listTrelloCards,
   listZendeskTickets,
 } from '../api/integrations';
-import { listSelfHealingIncidents } from '../api/selfHealing';
+import { listSelfHealingCiFailures, listSelfHealingIncidents } from '../api/selfHealing';
 import { ExternalLinkIcon, GitHubIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type {
   Application,
@@ -61,7 +61,7 @@ const KANBAN_LANES: { id: GoalStatus; label: string }[] = [
 ];
 
 type ApplicationViewTab = 'dashboard' | 'self_healing';
-type SelfHealingViewTab = 'incidents';
+type SelfHealingViewTab = 'incidents' | 'ci_cd';
 
 const STANDARD_WORKFLOW_NAME = 'Standard workflow';
 
@@ -180,6 +180,7 @@ function GoalCard({
     if (source === 'jira') return 'Jira';
     if (source === 'trello') return 'Trello';
     if (source === 'zendesk') return 'Zendesk';
+    if (source === 'circleci') return 'CircleCI';
     return 'Manual';
   }
 
@@ -380,8 +381,10 @@ function JiraImportPanel({
 function SelfHealingSection({
   application,
   incidents,
+  ciIncidents,
   goals,
   loadError,
+  ciLoadError,
   integrations,
   workflowTemplates,
   saving,
@@ -391,8 +394,10 @@ function SelfHealingSection({
 }: {
   application: Application;
   incidents: SelfHealingIncident[];
+  ciIncidents: SelfHealingIncident[];
   goals: Goal[];
   loadError: string | null;
+  ciLoadError: string | null;
   integrations: IntegrationStatus[];
   workflowTemplates: WorkflowDefinition[];
   saving: boolean;
@@ -406,6 +411,7 @@ function SelfHealingSection({
   onAutoFix: (application: Application, incident: SelfHealingIncident) => void;
 }) {
   const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
+  const circleciConnected = integrations.find((i) => i.provider === 'circleci')?.connected;
   const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
   const selectedWorkflow = resolveSelfHealingWorkflow(application, workflowTemplates);
   const pipelineSteps = (selectedWorkflow?.steps as WorkflowRole[] | undefined) ?? [];
@@ -418,8 +424,16 @@ function SelfHealingSection({
   const unknownWorkflow = !!application.self_healing_workflow_id && !selectedWorkflow;
   const missingDevelop = !!selectedWorkflow && !effective.develop;
   const missingDeploy = !!selectedWorkflow && pipelineSteps.includes('deploy') && !effective.deploy;
-  const autoFixDisabled =
+  const supportFixDisabled =
     !zendeskConnected ||
+    !githubConnected ||
+    !application.github_repo_url ||
+    missingWorkflow ||
+    unknownWorkflow ||
+    missingDevelop ||
+    missingDeploy;
+  const ciFixDisabled =
+    !circleciConnected ||
     !githubConnected ||
     !application.github_repo_url ||
     missingWorkflow ||
@@ -429,8 +443,9 @@ function SelfHealingSection({
   const [activeViewTab, setActiveViewTab] = useState<SelfHealingViewTab>('incidents');
   const viewTabs: { id: SelfHealingViewTab; label: string; count: number }[] = [
     { id: 'incidents', label: 'Incidents', count: incidents.length },
+    { id: 'ci_cd', label: 'CI/CD failures', count: ciIncidents.length },
   ];
-  const autoFixUnavailableReason =
+  const supportFixUnavailableReason =
     !zendeskConnected
       ? 'Connect Zendesk to load incidents.'
       : !githubConnected
@@ -447,7 +462,26 @@ function SelfHealingSection({
                   ? 'The workflow must include a Deployment agent.'
                   : undefined;
 
+  const ciFixUnavailableReason = !circleciConnected
+    ? 'Connect CircleCI in Integrations and add the webhook URL to your CircleCI project.'
+    : !githubConnected
+      ? 'Connect GitHub before auto-fix can open PRs.'
+      : !application.github_repo_url
+        ? 'Link a GitHub repository that matches your CircleCI project.'
+        : unknownWorkflow
+          ? 'The configured self-healing workflow no longer exists.'
+          : missingWorkflow
+            ? 'Create the standard workflow or keep only one saved workflow.'
+            : missingDevelop
+              ? 'The workflow must include a Development agent.'
+              : missingDeploy
+                ? 'The workflow must include a Deployment agent.'
+                : undefined;
+
   function incidentGoal(incident: SelfHealingIncident): Goal | undefined {
+    if (incident.kind === 'ci_cd') {
+      return goals.find((g) => g.id === incident.id);
+    }
     if (incident.goal_id) {
       return goals.find((g) => g.id === incident.goal_id);
     }
@@ -460,15 +494,21 @@ function SelfHealingSection({
     );
   }
 
+  function fixingKey(incident: SelfHealingIncident) {
+    const k = incident.kind ?? 'support';
+    return `${incident.id}:${k}`;
+  }
+
   return (
     <section className="self-healing-section" aria-label={`Self-healing for ${application.title}`}>
-      {loadError && <p className="alert alert-error">{loadError}</p>}
+      {activeViewTab === 'incidents' && loadError && <p className="alert alert-error">{loadError}</p>}
+      {activeViewTab === 'ci_cd' && ciLoadError && <p className="alert alert-error">{ciLoadError}</p>}
 
       <div className="self-healing-simple-header">
         <p className="muted small">
           {application.self_healing_enabled
-            ? 'New matching incidents will trigger the standard workflow automatically.'
-            : 'New incidents will wait here until you choose Auto fix.'}
+            ? 'When Auto fix is on, matching Zendesk tickets and failed CircleCI runs for this repo start the standard workflow automatically.'
+            : 'Zendesk incidents appear here from support; CircleCI failures appear under CI/CD when webhooks fire. Use Fix to start the workflow manually.'}
         </p>
         <button
           type="button"
@@ -521,7 +561,7 @@ function SelfHealingSection({
                 <div className="import-list self-healing-incident-list">
                   {incidents.map((incident) => {
                     const goal = incidentGoal(incident);
-                    const isFixing = autoFixingIncidentId === incident.id;
+                    const isFixing = autoFixingIncidentId === fixingKey(incident);
                     const execStatus = goal?.execution_status ?? incident.execution_status;
                     const prUrl = goal?.pr_url ?? incident.pr_url;
                     const ticketStatus = (incident.status ?? '').toLowerCase();
@@ -578,11 +618,110 @@ function SelfHealingSection({
                             <button
                               type="button"
                               className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
-                              disabled={autoFixDisabled || isFixing}
-                              title={autoFixDisabled ? autoFixUnavailableReason : undefined}
+                              disabled={supportFixDisabled || isFixing}
+                              title={supportFixDisabled ? supportFixUnavailableReason : undefined}
                               onClick={() => onAutoFix(application, incident)}
                             >
                               {isFixing ? 'Starting…' : fixState === 'failed' ? 'Retry fix' : 'Fix'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeViewTab === 'ci_cd' && (
+            <div className="self-healing-incidents" role="tabpanel">
+              {!circleciConnected ? (
+                <p className="muted small self-healing-empty">
+                  Connect CircleCI under Integrations, then add the webhook URL to your CircleCI project. Failed
+                  workflows or jobs that match this application&apos;s GitHub repository will create goals here when
+                  Auto fix is enabled.
+                </p>
+              ) : ciIncidents.length === 0 ? (
+                <p className="muted small self-healing-empty">
+                  No CircleCI failures recorded yet. Add the webhook in CircleCI (workflow-completed / job-completed
+                  events) and ensure this application&apos;s linked repository matches the pipeline repository.
+                </p>
+              ) : (
+                <div className="import-list self-healing-incident-list">
+                  {ciIncidents.map((incident) => {
+                    const goal = incidentGoal(incident);
+                    const isFixing = autoFixingIncidentId === fixingKey(incident);
+                    const execStatus = goal?.execution_status ?? incident.execution_status;
+                    const prUrl = goal?.pr_url ?? incident.pr_url;
+                    const isRunning = execStatus === 'queued' || execStatus === 'running';
+                    const isCompleted = execStatus === 'completed';
+                    const isFailed = execStatus === 'failed';
+
+                    let fixState: 'running' | 'fixed' | 'created' | 'failed' | 'idle';
+                    if (isRunning) fixState = 'running';
+                    else if (isCompleted && prUrl) fixState = 'fixed';
+                    else if (isCompleted) fixState = 'created';
+                    else if (isFailed) fixState = 'failed';
+                    else fixState = 'idle';
+
+                    return (
+                      <div key={incident.id} className="import-item self-healing-incident">
+                        <div className="import-item-content">
+                          <div className="self-healing-incident-title">
+                            {incident.key && <strong className="self-healing-ci-key">{incident.key}</strong>}
+                            <span>{incident.title}</span>
+                          </div>
+                          {incident.url && (
+                            <a
+                              href={incident.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="muted small self-healing-ci-circle-link"
+                            >
+                              Open in CircleCI
+                            </a>
+                          )}
+                        </div>
+                        <div className="self-healing-incident-actions">
+                          {prUrl && (
+                            <a
+                              href={prUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost btn-sm self-healing-pr-link"
+                            >
+                              <ExternalLinkIcon />
+                              View PR
+                            </a>
+                          )}
+                          {fixState === 'running' && (
+                            <span className="status-pill status-pill-running">
+                              <span className="status-dot" />
+                              Fixing…
+                            </span>
+                          )}
+                          {fixState === 'fixed' && (
+                            <span className="status-pill status-pill-fixed">Merged / PR ready</span>
+                          )}
+                          {fixState === 'created' && (
+                            <span className="status-pill status-pill-created">Run finished</span>
+                          )}
+                          {(fixState === 'idle' || fixState === 'failed') && (
+                            <button
+                              type="button"
+                              className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+                              disabled={ciFixDisabled || isFixing}
+                              title={ciFixDisabled ? ciFixUnavailableReason : undefined}
+                              onClick={() => onAutoFix(application, incident)}
+                            >
+                              {isFixing
+                                ? 'Working…'
+                                : fixState === 'failed'
+                                  ? goal?.resumable
+                                    ? 'Retry fix'
+                                    : 'Open run'
+                                  : 'Open run'}
                             </button>
                           )}
                         </div>
@@ -1180,6 +1319,8 @@ export function ApplicationDetailPage() {
   const [zendeskLoadError, setZendeskLoadError] = useState<string | null>(null);
   const [selfHealingIncidents, setSelfHealingIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
   const [selfHealingLoadErrors, setSelfHealingLoadErrors] = useState<Record<string, string | null>>({});
+  const [selfHealingCiIncidents, setSelfHealingCiIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
+  const [selfHealingCiLoadErrors, setSelfHealingCiLoadErrors] = useState<Record<string, string | null>>({});
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1225,6 +1366,7 @@ export function ApplicationDetailPage() {
       const jiraOn = integrationsData.find((i) => i.provider === 'jira')?.connected;
       const trelloOn = integrationsData.find((i) => i.provider === 'trello')?.connected;
       const zendeskOn = integrationsData.find((i) => i.provider === 'zendesk')?.connected;
+      const circleciOn = integrationsData.find((i) => i.provider === 'circleci')?.connected;
 
       if (githubOn) {
         try {
@@ -1299,6 +1441,30 @@ export function ApplicationDetailPage() {
       setSelfHealingLoadErrors(
         Object.fromEntries(incidentEntries.map(([appId, , loadError]) => [appId, loadError])),
       );
+
+      const ciEntries = await Promise.all(
+        appsData.map(async (app) => {
+          if (!circleciOn) {
+            return [app.id, [] as SelfHealingIncident[], null] as const;
+          }
+          try {
+            const rows = await listSelfHealingCiFailures(app.id);
+            return [app.id, rows, null] as const;
+          } catch (e) {
+            return [
+              app.id,
+              [] as SelfHealingIncident[],
+              e instanceof Error ? e.message : 'Failed to load CI/CD failures',
+            ] as const;
+          }
+        }),
+      );
+      setSelfHealingCiIncidents(
+        Object.fromEntries(ciEntries.map(([appId, incidents]) => [appId, incidents])),
+      );
+      setSelfHealingCiLoadErrors(
+        Object.fromEntries(ciEntries.map(([appId, , loadError]) => [appId, loadError])),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load applications');
     } finally {
@@ -1370,6 +1536,20 @@ export function ApplicationDetailPage() {
     }
   }
 
+  async function refreshSelfHealingCiIncidents(applicationId: string) {
+    setSelfHealingCiLoadErrors((prev) => ({ ...prev, [applicationId]: null }));
+    try {
+      const rows = await listSelfHealingCiFailures(applicationId);
+      setSelfHealingCiIncidents((prev) => ({ ...prev, [applicationId]: rows }));
+    } catch (e) {
+      setSelfHealingCiIncidents((prev) => ({ ...prev, [applicationId]: [] }));
+      setSelfHealingCiLoadErrors((prev) => ({
+        ...prev,
+        [applicationId]: e instanceof Error ? e.message : 'Failed to load CI/CD failures',
+      }));
+    }
+  }
+
   async function handleSelfHealingSettingsChange(
     applicationId: string,
     updates: {
@@ -1389,6 +1569,31 @@ export function ApplicationDetailPage() {
   }
 
   async function handleSelfHealingAutoFix(application: Application, incident: SelfHealingIncident) {
+    if (incident.kind === 'ci_cd') {
+      const goal = goals.find((g) => g.id === incident.id);
+      if (!goal) {
+        setError('Goal not found for this CI failure.');
+        return;
+      }
+      const key = `${application.id}:${incident.id}:ci_cd`;
+      setAutoFixingIncident(key);
+      setError(null);
+      try {
+        if (goal.execution_status === 'failed' && goal.resumable) {
+          const updated = await resumeGoal(incident.id);
+          setGoals((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+          await refreshSelfHealingCiIncidents(application.id);
+        } else {
+          navigate(goalExecutionPath(goal));
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to update goal');
+      } finally {
+        setAutoFixingIncident(null);
+      }
+      return;
+    }
+
     const configuredWorkflowId = application.self_healing_workflow_id?.trim();
     const workflow = resolveSelfHealingWorkflow(application, workflowTemplates);
     if (!workflow) {
@@ -1418,7 +1623,7 @@ export function ApplicationDetailPage() {
       return;
     }
 
-    const key = `${application.id}:${incident.id}`;
+    const key = `${application.id}:${incident.id}:support`;
     setAutoFixingIncident(key);
     setError(null);
     try {
@@ -1726,7 +1931,10 @@ export function ApplicationDetailPage() {
                 onClick={() => setActiveViewTab('self_healing')}
               >
                 <span>Self-healing</span>
-                <span className="card-count">{(selfHealingIncidents[currentApp.id] ?? []).length}</span>
+                <span className="card-count">
+                  {(selfHealingIncidents[currentApp.id] ?? []).length +
+                    (selfHealingCiIncidents[currentApp.id] ?? []).length}
+                </span>
               </button>
             </div>
 
@@ -1734,8 +1942,10 @@ export function ApplicationDetailPage() {
               <SelfHealingSection
                 application={currentApp}
                 incidents={selfHealingIncidents[currentApp.id] ?? []}
+                ciIncidents={selfHealingCiIncidents[currentApp.id] ?? []}
                 goals={goals}
                 loadError={selfHealingLoadErrors[currentApp.id] ?? null}
+                ciLoadError={selfHealingCiLoadErrors[currentApp.id] ?? null}
                 integrations={integrations}
                 workflowTemplates={workflowTemplates}
                 saving={savingSelfHealingFor === currentApp.id}
