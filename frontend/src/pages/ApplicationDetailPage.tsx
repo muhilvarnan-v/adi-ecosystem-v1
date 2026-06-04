@@ -1259,12 +1259,6 @@ function ApplicationKanban({
                   <button
                     type="button"
                     className="kanban-lane-add"
-                    disabled={!workflowTemplates.length}
-                    title={
-                      workflowTemplates.length
-                        ? undefined
-                        : 'Create a workflow under Workflows before adding goals.'
-                    }
                     onClick={() => {
                       void onRefreshWorkflowTemplates?.();
                       setShowCreateModal(true);

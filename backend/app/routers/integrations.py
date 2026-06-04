@@ -408,7 +408,10 @@ async def zendesk_tickets(user_id: str = Depends(get_user_id)):
 
 
 @router.get("/github/repos", response_model=list[GitHubRepoPreview])
-async def github_repos(user_id: str = Depends(get_user_id)):
+async def github_repos(
+    max_results: int = Query(default=1000, ge=1, le=5000),
+    user_id: str = Depends(get_user_id),
+):
     db = get_firestore()
     integration = db.get_integration(user_id, IntegrationProvider.GITHUB.value)
     if not integration:
@@ -417,7 +420,7 @@ async def github_repos(user_id: str = Depends(get_user_id)):
     settings = get_settings()
     github = GitHubOAuthService(settings)
     try:
-        repos = await github.list_repos_for_user(user_id)
+        repos = await github.list_repos_for_user(user_id, max_results=max_results)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

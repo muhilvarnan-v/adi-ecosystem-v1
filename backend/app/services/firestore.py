@@ -195,15 +195,19 @@ class FirestoreService:
         user_id: str,
         application_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        query = self._db.collection(GOALS_COLLECTION).where(filter=firestore.FieldFilter("user_id", "==", user_id))
-        if application_id is not None:
-            query = query.where(filter=firestore.FieldFilter("application_id", "==", application_id))
-        query = query.order_by("created_at", direction=firestore.Query.DESCENDING)
+        # Avoid Firestore composite index requirements for
+        # user_id + application_id + created_at by sorting in memory.
+        query = self._db.collection(GOALS_COLLECTION).where(
+            filter=firestore.FieldFilter("user_id", "==", user_id)
+        )
         results = []
         for doc in query.stream():
             row = doc.to_dict()
+            if application_id is not None and row.get("application_id") != application_id:
+                continue
             row["id"] = doc.id
             results.append(row)
+        results.sort(key=lambda row: row.get("created_at") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return results
 
     def find_goal_by_external_id(

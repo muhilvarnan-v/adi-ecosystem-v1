@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +11,10 @@ class Settings(BaseSettings):
     debug: bool = False
     cors_origins: str = "http://localhost:5173"
 
-    firestore_project_id: str = ""
+    firestore_project_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("FIRESTORE_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"),
+    )
 
     oauth_redirect_base: str = "http://localhost:8000"
 
@@ -23,7 +27,7 @@ class Settings(BaseSettings):
 
     github_client_id: str = ""
     github_client_secret: str = ""
-    github_scopes: str = "read:user repo"
+    github_scopes: str = "read:user read:org repo"
 
     zendesk_client_id: str = ""
     zendesk_client_secret: str = ""

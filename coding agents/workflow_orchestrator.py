@@ -29,6 +29,159 @@ from run_multi_repo import (
 PHASE_RESULT_FILE = ".openhands_phase_result.json"
 
 
+def _write_fallback_phase_result(
+    path: Path,
+    *,
+    reason: str,
+    on_log: EmitLog | None,
+) -> None:
+    """Write a deterministic failed phase-result payload when agent output is missing."""
+    payload = {
+        "status": "failed",
+        "summary": "Phase result artifact was not produced",
+        "feedback": reason.strip() or f"Missing {PHASE_RESULT_FILE}",
+    }
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        _emit_log(
+            on_log,
+            f"Wrote fallback {PHASE_RESULT_FILE}: {payload['feedback']}",
+            event_kind="workflow",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _emit_log(
+            on_log,
+            f"Failed to write fallback {PHASE_RESULT_FILE}: {exc}",
+            event_kind="workflow",
+        )
+
+
+def _recover_artifact_from_workspace(
+    *,
+    workspace: Any,
+    local_path: Path,
+    on_log: EmitLog | None,
+) -> bool:
+    """Best-effort: copy an artifact from the active workspace to local repo_dir.
+
+    This is primarily needed for remote runtime sandboxes where the agent writes
+    files inside the remote working directory (for example /workspace), while the
+    orchestrator checks local clone paths.
+    """
+    if local_path.exists():
+        return True
+
+    working_dir = str(getattr(workspace, "working_dir", "") or "").strip()
+    if not working_dir:
+        return False
+
+    # Probe a small set of likely locations in remote workspace layouts.
+    basename = local_path.name
+    repo_name = local_path.parent.name
+    candidates = [
+        Path(working_dir) / basename,
+        Path(working_dir) / repo_name / basename,
+        Path(working_dir) / "repo" / basename,
+    ]
+
+    seen: set[str] = set()
+    last_error: str | None = None
+
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+        if candidate == local_path:
+            continue
+        try:
+            result = workspace.file_download(candidate_str, str(local_path))
+            if getattr(result, "success", False) and local_path.exists():
+                _emit_log(
+                    on_log,
+                    f"Recovered {basename} from workspace path {candidate_str}",
+                    event_kind="workflow",
+                )
+                return True
+            err = str(getattr(result, "error", "") or "").strip()
+            if err:
+                last_error = err
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+
+    # Exhaustive fallback: locate artifact anywhere under working_dir.
+    try:
+        find_cmd = (
+            "find "
+            + "'"
+            + working_dir.replace("'", "'\\''")
+            + "' -type f -name "
+            + "'"
+            + basename.replace("'", "'\\''")
+            + "' 2>/dev/null | head -n 1"
+        )
+        find_result = workspace.execute_command(find_cmd, timeout=25.0)
+        find_exit = int(getattr(find_result, "exit_code", 1) or 1)
+        found_path = str(getattr(find_result, "stdout", "") or "").strip().splitlines()
+        found_candidate = found_path[0].strip() if find_exit == 0 and found_path else ""
+        if found_candidate:
+            try:
+                dl_result = workspace.file_download(found_candidate, str(local_path))
+                if getattr(dl_result, "success", False) and local_path.exists():
+                    _emit_log(
+                        on_log,
+                        f"Recovered {basename} by searching workspace at {found_candidate}",
+                        event_kind="workflow",
+                    )
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+
+            try:
+                cat_cmd = f"cat '{found_candidate}'"
+                cat_result = workspace.execute_command(cat_cmd, timeout=20.0)
+                cat_exit = int(getattr(cat_result, "exit_code", 1) or 1)
+                cat_stdout = str(getattr(cat_result, "stdout", "") or "")
+                if cat_exit == 0 and cat_stdout.strip():
+                    local_path.write_text(cat_stdout, encoding="utf-8")
+                    _emit_log(
+                        on_log,
+                        f"Recovered {basename} by cat after search at {found_candidate}",
+                        event_kind="workflow",
+                    )
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        last_error = str(exc)
+
+        # Fallback: read artifact content over command execution and write locally.
+        # This handles runtimes where file_download is unavailable/restricted.
+        try:
+            cmd = f"cat '{candidate_str}'"
+            cmd_result = workspace.execute_command(cmd, timeout=20.0)
+            exit_code = int(getattr(cmd_result, "exit_code", 1) or 1)
+            stdout = str(getattr(cmd_result, "stdout", "") or "")
+            if exit_code == 0 and stdout.strip():
+                local_path.write_text(stdout, encoding="utf-8")
+                _emit_log(
+                    on_log,
+                    f"Recovered {basename} via command from {candidate_str}",
+                    event_kind="workflow",
+                )
+                return True
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+
+    if last_error:
+        _emit_log(
+            on_log,
+            f"Artifact recovery failed for {basename}: {last_error[:200]}",
+            event_kind="workflow",
+        )
+    return local_path.exists()
+
+
 class WorkflowPhase(str, Enum):
     DEVELOP = "develop"
     REVIEW = "review"
@@ -355,9 +508,26 @@ def run_phase(
             cycle=cycle,
             feedback=feedback,
         )
+        needs_phase_recovery = phase != WorkflowPhase.DEPLOY
         try:
             conversation.send_message(prompt)
             conversation.run()
+
+            if needs_phase_recovery:
+                _recover_artifact_from_workspace(
+                    workspace=workspace,
+                    local_path=phase_path,
+                    on_log=on_log,
+                )
+                if not phase_path.exists():
+                    _write_fallback_phase_result(
+                        phase_path,
+                        reason=(
+                            f"{PHASE_RESULT_FILE} was not found after phase run and workspace recovery. "
+                            "The phase has been marked failed automatically."
+                        ),
+                        on_log=on_log,
+                    )
         finally:
             try:
                 conversation.close()

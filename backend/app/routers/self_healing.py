@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Query, Request
@@ -39,8 +40,8 @@ def list_ci_failures(application_id: str, user_id: str = Depends(get_user_id)):
 
 @router.post("/self-healing/zendesk/webhook", response_model=ZendeskWebhookResult)
 async def zendesk_webhook(payload: dict[str, Any]):
-    db = get_firestore()
-    return await handle_zendesk_webhook(db, payload)
+    print(payload)
+    return ZendeskWebhookResult(received_at=datetime.now(timezone.utc))
 
 
 @router.post("/self-healing/circleci/webhook", response_model=CircleCIWebhookResult)
@@ -51,6 +52,7 @@ async def circleci_webhook(
 ):
     db = get_firestore()
     event_type = request.headers.get("circleci-event-type") or request.headers.get("Circleci-Event-Type")
+    print({"event": "circleci_webhook", "event_type": event_type, "payload": payload})
     return handle_circleci_webhook(
         db,
         webhook_token=token,

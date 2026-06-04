@@ -40,7 +40,7 @@ def _github_http_error(exc: httpx.HTTPStatusError) -> ValueError:
     if status in (401, 403, 404):
         hint = (
             "GitHub authentication failed. Disconnect and reconnect GitHub in Integrations "
-            "(ensure the OAuth app has the repo scope), or set GITHUB_TOKEN in the backend .env."
+            "(ensure the OAuth app has repo and read:org scopes), or set GITHUB_TOKEN in the backend .env."
         )
         detail = f"{message}. {hint}" if message else hint
         return ValueError(detail)
@@ -93,7 +93,7 @@ class GitHubOAuthService:
                 raise _github_http_error(exc) from exc
             return response.json()
 
-    async def list_repos(self, access_token: str, max_results: int = 100) -> list[dict]:
+    async def list_repos(self, access_token: str, max_results: int = 1000) -> list[dict]:
         """List repositories visible to the authenticated user (paginated)."""
         repos: list[dict] = []
         per_page = min(100, max_results)
@@ -129,7 +129,7 @@ class GitHubOAuthService:
 
         return repos[:max_results]
 
-    async def list_repos_for_user(self, user_id: str, max_results: int = 100) -> list[dict]:
+    async def list_repos_for_user(self, user_id: str, max_results: int = 1000) -> list[dict]:
         """List repos using OAuth token, falling back to GITHUB_TOKEN on auth failure."""
         from app.services.github_tokens import resolve_github_tokens
 

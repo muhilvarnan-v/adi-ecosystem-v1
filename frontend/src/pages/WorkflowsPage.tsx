@@ -71,12 +71,31 @@ export function WorkflowsPage() {
       setLoading(true);
       setError(null);
       try {
-        const [wfRes, ag, sb] = await Promise.all([listWorkflows(), listAgents(), listWorkspaces()]);
+        const [wfRes, agRes, sbRes] = await Promise.allSettled([
+          listWorkflows(),
+          listAgents(),
+          listWorkspaces(),
+        ]);
         if (cancelled) return;
-        const raw = wfRes.workflows ?? [];
-        setWorkflows(raw.map((w: WorkflowDefinition) => normalizeWorkflowRow(w)));
-        setAgents(ag);
-        setSandboxes(sb);
+        if (wfRes.status === 'fulfilled') {
+          const raw = wfRes.value.workflows ?? [];
+          setWorkflows(raw.map((w: WorkflowDefinition) => normalizeWorkflowRow(w)));
+        } else {
+          setWorkflows([]);
+          setError(wfRes.reason instanceof Error ? wfRes.reason.message : 'Failed to load workflows');
+        }
+
+        if (agRes.status === 'fulfilled') {
+          setAgents(agRes.value);
+        } else {
+          setAgents([]);
+        }
+
+        if (sbRes.status === 'fulfilled') {
+          setSandboxes(sbRes.value);
+        } else {
+          setSandboxes([]);
+        }
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load');
