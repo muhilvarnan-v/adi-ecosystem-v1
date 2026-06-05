@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # See https://docs.all-hands.dev/modules/usage/architecture/runtime
     openhands_runtime_host: str = ""
     openhands_runtime_api_key: str = ""
+    # When true, goal runs fail if remote runtime is unavailable/misconfigured.
+    openhands_require_remote_workspace: bool = False
     # Passed to subprocess for runtime-side config (optional; server-dependent).
     openhands_docker_base_image: str = ""
 

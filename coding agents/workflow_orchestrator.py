@@ -362,6 +362,11 @@ def _phase_prompt(
           "summary": "<one line>",
           "feedback": "<required when failed; optional when passed>"
         }}
+
+                Completion gate (mandatory):
+                - Before ending your run, verify the file exists in the repo root and contains valid JSON.
+                - Run a quick check like: `test -f {PHASE_RESULT_FILE} && python -m json.tool {PHASE_RESULT_FILE} >/dev/null`.
+                - If validation fails, fix the file first. Do not finish until this passes.
         """
     ).strip()
 
@@ -424,6 +429,13 @@ def _phase_prompt(
           "pr_url": "<url or NONE>",
           "summary": "<one line>"
         }}
+
+                Completion gate (mandatory):
+                - Before ending your run, verify BOTH files exist in the repo root and contain valid JSON.
+                - Run checks like:
+                    `test -f {PHASE_RESULT_FILE} && python -m json.tool {PHASE_RESULT_FILE} >/dev/null`
+                    `test -f .openhands_result.json && python -m json.tool .openhands_result.json >/dev/null`
+                - If any check fails, fix the files first. Do not finish until both checks pass.
 
         End your final message with:
         PR_URL: <url or NONE>

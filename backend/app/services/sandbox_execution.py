@@ -10,6 +10,12 @@ from app.services.firestore import FirestoreService
 def sandbox_execution_dict_from_environment_row(row: dict[str, Any]) -> dict[str, Any]:
     """Shape stored in Firestore → JSON sent to ``run_goal.py`` as ``openhands_sandbox``."""
     kind = str(row.get("sandbox_type") or "docker").strip().lower()
+    runtime_working_dir = str(
+        row.get("runtime_working_dir")
+        or row.get("working_dir")
+        or row.get("remote_working_dir")
+        or ""
+    ).strip()
     if kind == "remote":
         url = (row.get("remote_runtime_api_url") or "").strip()
         key = (row.get("remote_runtime_api_key") or "").strip()
@@ -20,21 +26,27 @@ def sandbox_execution_dict_from_environment_row(row: dict[str, Any]) -> dict[str
             raise ValueError("Remote sandbox is missing runtime_api_key")
         if not img:
             raise ValueError("Remote sandbox is missing server_image")
-        return {
+        payload = {
             "kind": "remote",
             "runtime_api_url": url.rstrip("/"),
             "runtime_api_key": key,
             "server_image": img,
         }
+        if runtime_working_dir:
+            payload["working_dir"] = runtime_working_dir
+        return payload
 
     port = int(row.get("docker_host_port") or 8010)
     image = (row.get("docker_server_image") or "").strip() or "ghcr.io/openhands/agent-server:latest-python"
-    return {
+    payload = {
         "kind": "docker",
         "host_port": port,
         "server_image": image,
         "runtime_host": f"http://127.0.0.1:{port}",
     }
+    if runtime_working_dir:
+        payload["working_dir"] = runtime_working_dir
+    return payload
 
 
 def resolve_workflow_sandbox_execution(

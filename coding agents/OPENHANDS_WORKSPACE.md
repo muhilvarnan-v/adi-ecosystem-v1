@@ -19,6 +19,7 @@ For **Docker-isolated** execution, OpenHands expects a **runtime / agent server*
 1. Set **`OPENHANDS_RUNTIME_HOST`** to the base URL of that server (e.g. `https://your-openhands-runtime.example.com`), **or** configure the AID backend `.env`:
    - `openhands_runtime_host`
    - `openhands_runtime_api_key` (optional, forwarded as `OPENHANDS_RUNTIME_API_KEY`)
+   - `openhands_require_remote_workspace=true` to fail fast if runtime is unreachable (no local fallback)
    - `openhands_docker_base_image` (optional; depends on your runtime — forwarded as `OPENHANDS_DOCKER_BASE_IMAGE` for server-side use)
 
 2. Restart the backend so subprocesses inherit these variables when invoking `coding agents/run_goal.py`.

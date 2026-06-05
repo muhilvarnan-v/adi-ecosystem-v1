@@ -8,6 +8,7 @@ venv/
 # Node
 node_modules/
 dist/
+.openhands-workspaces/
 
 # IDE / OS
 .DS_Store

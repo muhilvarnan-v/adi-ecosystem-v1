@@ -15,14 +15,15 @@ Example:
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import textwrap
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from collections.abc import Callable
@@ -32,7 +33,11 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from agent_log_context import current_workflow_agent_context, workflow_agent_context
-from openhands_workspace import resolve_openhands_workspace
+from openhands_workspace import (
+    activate_openhands_workspace,
+    close_openhands_workspace,
+    resolve_openhands_workspace,
+)
 
 # Log sink: optional second dict carries agent / phase / event_kind for structured UIs.
 EmitLog = Callable[[str, dict[str, Any] | None], None]
@@ -48,10 +53,13 @@ os.environ["PAGER"] = "cat"
 os.environ.setdefault("GIT_TERMINAL_PROMPT", "0")
 
 ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = ROOT.parent
+WORKSPACE_ROOT = PROJECT_ROOT / ".openhands-workspaces"
 DEFAULT_MODEL = "openai/ai-ops-gemini-2.5-flash"
 DEFAULT_LLM_BASE_URL = "https://gap-dev.thoughtworks.net/v1"
 RESULT_FILE = ".openhands_result.json"
 PR_URL_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
+REPO_BRIEF_MAX_CHARS = 8000
 
 
 def import_openhands_sdk() -> tuple[Any, Any, Any, Any, Any, Any, Any]:
@@ -80,6 +88,73 @@ class RepoRunResult:
     summary: str | None
     workspace: str | None
     error: str | None = None
+
+
+def _ensure_mount_writable(path: Path) -> None:
+    """Relax permissions so Docker runtime users can write bind-mounted repos."""
+    try:
+        current_user = (os.environ.get("USER") or os.environ.get("LOGNAME") or "").strip()
+        if current_user:
+            subprocess.run(
+                ["chmod", "-R", "u+rwX", str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        subprocess.run(
+            [
+                "chmod",
+                "-R",
+                "+a",
+                "openhands allow read,write,execute,add_file,add_subdirectory,delete,delete_child,file_inherit,directory_inherit",
+                str(path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        subprocess.run(
+            ["chmod", "-R", "a+rwX", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+    except Exception:
+        # Non-fatal: diagnostics in workflow_orchestrator will surface mount issues.
+        pass
+
+
+@contextmanager
+def _repo_cwd(repo_dir: Path):
+    """Run OpenHands operations from repo cwd so SDK git probes see .git."""
+    previous = Path.cwd()
+    changed = False
+    try:
+        os.chdir(repo_dir)
+        changed = True
+    except Exception:
+        changed = False
+    try:
+        yield
+    finally:
+        if changed:
+            try:
+                os.chdir(previous)
+            except Exception:
+                pass
+
+
+def create_project_workspace(goal_slug: str) -> Path:
+    """Create a project-local workspace directory for a run."""
+    WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+    workspace_name = f"openhands-goal-{goal_slug}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    workspace_parent = WORKSPACE_ROOT / workspace_name
+    workspace_parent.mkdir(parents=True, exist_ok=False)
+    _ensure_mount_writable(workspace_parent)
+    return workspace_parent
 
 
 def load_env() -> None:
@@ -381,11 +456,156 @@ def format_openhands_event(event: Any) -> str | None:
     return full
 
 
-def build_goal_prompt(goal: str, base_branch: str, feature_branch: str) -> str:
+def build_repo_explain_prompt(repo_url: str, base_branch: str) -> str:
+    return textwrap.dedent(
+        f"""
+        You are an expert software engineer. The repository at {repo_url}
+        (branch: {base_branch}) has already been cloned into your working directory.
+
+        Your task:
+        1. Run `ls -la` to inspect top-level files.
+        2. Read README and key source entry points.
+        3. Summarize architecture, key modules, and how the project is typically used.
+
+        Keep it concise and factual. Do NOT create, modify, or commit any files.
+        """
+    ).strip()
+
+
+def _message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict):
+            text = block.get("text")
+        else:
+            text = getattr(block, "text", None)
+        if text:
+            parts.append(str(text).strip())
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _extract_last_assistant_message(events: list[Any]) -> str | None:
+    for event in reversed(events):
+        if type(event).__name__ != "MessageEvent":
+            continue
+        message = getattr(event, "llm_message", None)
+        role = str(getattr(message, "role", "")).strip().lower() if message else ""
+        if role != "assistant":
+            continue
+        text = _message_content_to_text(getattr(message, "content", None))
+        if text:
+            return text
+    return None
+
+
+def run_repository_recon(
+    *,
+    repo_url: str,
+    base_branch: str,
+    repo_dir: Path,
+    model: str,
+    api_key: str,
+    openhands_sandbox: dict[str, Any] | None,
+    on_log: EmitLog | None,
+) -> str | None:
+    (
+        Agent,
+        Conversation,
+        _,
+        Tool,
+        FileEditorTool,
+        _,
+        TerminalTool,
+        _,
+    ) = import_openhands_sdk()
+
+    with workflow_agent_context(agent="Repo scout", phase="goal", cycle=0):
+        emit_harness_log(
+            on_log,
+            "Running repository reconnaissance in OpenHands workspace…",
+        )
+
+        llm = build_llm(model=model, api_key=api_key)
+        agent = Agent(
+            llm=llm,
+            tools=[
+                Tool(name=TerminalTool.name),
+                Tool(name=FileEditorTool.name),
+            ],
+        )
+
+        def event_callback(event: Any) -> None:
+            meta = openhands_event_meta(event)
+            if not meta or not on_log:
+                return
+            full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
+            on_log(full, slim_log_fields(merged, body))
+
+        with _repo_cwd(repo_dir):
+            raw_workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
+            workspace, workspace_handle = activate_openhands_workspace(raw_workspace)
+            conversation = Conversation(
+                agent=agent,
+                workspace=workspace,
+                callbacks=[event_callback],
+                visualizer=None,
+            )
+            prompt = build_repo_explain_prompt(repo_url, base_branch)
+            try:
+                conversation.send_message(prompt)
+                conversation.run()
+            finally:
+                try:
+                    conversation.close()
+                except Exception:
+                    pass
+                try:
+                    close_openhands_workspace(workspace_handle)
+                except Exception:
+                    pass
+
+        state = getattr(conversation, "state", None)
+        events = getattr(state, "events", []) if state is not None else []
+        summary = _extract_last_assistant_message(list(events))
+        if summary:
+            trimmed = summary.strip()
+            if len(trimmed) > REPO_BRIEF_MAX_CHARS:
+                trimmed = trimmed[:REPO_BRIEF_MAX_CHARS].rstrip() + "\n..."
+            emit_harness_log(on_log, "Repository reconnaissance completed.")
+            return trimmed
+
+        emit_harness_log(on_log, "Repository reconnaissance produced no assistant summary.")
+        return None
+
+
+def build_goal_prompt(
+    goal: str,
+    base_branch: str,
+    feature_branch: str,
+    repo_summary: str | None = None,
+) -> str:
+    repo_context = ""
+    if repo_summary:
+        repo_context = textwrap.dedent(
+            f"""
+
+            Repository reconnaissance summary (generated in this workspace):
+            {repo_summary}
+
+            Use this summary as context, but verify any critical details against the repository before finalizing changes.
+            """
+        ).rstrip()
+
     return textwrap.dedent(
         f"""
         Work only inside the current repository and implement this goal:
         {goal}
+
+        {repo_context}
 
         Required workflow:
         1. Inspect the codebase and determine minimal safe changes.
@@ -457,6 +677,41 @@ def clone_repo(repo_url: str, base_branch: str, target_dir: Path) -> None:
         pass  # non-fatal; agent prompts are also instructed not to commit these
 
 
+def _effective_openhands_sandbox(
+    openhands_sandbox: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve sandbox mode for execution.
+
+    If callers did not provide a workflow sandbox but the legacy
+    OPENHANDS_RUNTIME_HOST points at localhost, prefer a per-run DockerWorkspace
+    so the cloned repo can be mounted into the runtime container.
+    """
+    if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind"):
+        return openhands_sandbox
+
+    host = (os.environ.get("OPENHANDS_RUNTIME_HOST") or "").strip().rstrip("/")
+    if not host:
+        return None
+
+    parsed = urlparse(host)
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname not in {"127.0.0.1", "localhost"}:
+        return None
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    sandbox: dict[str, Any] = {
+        "kind": "docker",
+        "host_port": int(port),
+    }
+    image = (os.environ.get("OPENHANDS_DOCKER_SERVER_IMAGE") or "").strip()
+    if image:
+        sandbox["server_image"] = image
+    return sandbox
+
+
 def run_workflow_for_repo(
     *,
     repo_url: str,
@@ -481,7 +736,7 @@ def run_workflow_for_repo(
     from workflow_orchestrator import RoleAgentSpec, run_implementation_workflow
 
     goal_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (goal_id or "adhoc").strip())[:48].strip("-") or "adhoc"
-    workspace_parent = Path(tempfile.mkdtemp(prefix=f"openhands-goal-{goal_slug}-"))
+    workspace_parent = create_project_workspace(goal_slug)
     repo_dir = workspace_parent / "repo"
     repo_url = normalize_repo_url(repo_url)
     clone_url = auth_repo_url(repo_url, github_token)
@@ -490,9 +745,11 @@ def run_workflow_for_repo(
         os.environ["GITHUB_TOKEN"] = github_token
         os.environ["GH_TOKEN"] = github_token
 
+    effective_sandbox = _effective_openhands_sandbox(openhands_sandbox)
+
     if on_log:
-        if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind"):
-            mode = f"workflow sandbox ({openhands_sandbox.get('kind')})"
+        if isinstance(effective_sandbox, dict) and effective_sandbox.get("kind"):
+            mode = f"workflow sandbox ({effective_sandbox.get('kind')})"
         else:
             mode = "remote Docker runtime" if (os.environ.get("OPENHANDS_RUNTIME_HOST") or "").strip() else "local"
         emit_harness_log(on_log, f"OpenHands per-goal workspace ({mode}): {workspace_parent}")
@@ -501,6 +758,7 @@ def run_workflow_for_repo(
         if on_log:
             emit_harness_log(on_log, f"Cloning {repo_url} (branch {base_branch})…")
         clone_repo(clone_url, base_branch, repo_dir)
+        _ensure_mount_writable(repo_dir)
     except subprocess.CalledProcessError as exc:
         return (
             RepoRunResult(
@@ -529,9 +787,27 @@ def run_workflow_for_repo(
                 openhands_settings=dict(spec.get("openhands_settings") or {}),
             )
 
+        repo_summary = run_repository_recon(
+            repo_url=repo_url,
+            base_branch=base_branch,
+            repo_dir=repo_dir,
+            model=model,
+            api_key=api_key,
+            openhands_sandbox=effective_sandbox,
+            on_log=on_log,
+        )
+        goal_with_context = goal
+        if repo_summary:
+            goal_with_context = (
+                f"{goal}\n\n"
+                "Repository reconnaissance summary (generated before implementation):\n"
+                f"{repo_summary}\n\n"
+                "Use this summary as context and validate against files before making changes."
+            )
+
         result, graph = run_implementation_workflow(
             repo_dir=repo_dir,
-            goal=goal,
+            goal=goal_with_context,
             base_branch=base_branch,
             feature_branch=feature_branch,
             model=model,
@@ -542,7 +818,7 @@ def run_workflow_for_repo(
             on_log=on_log,
             on_workflow=on_workflow,
             on_chat=on_chat,
-            openhands_sandbox=openhands_sandbox,
+            openhands_sandbox=effective_sandbox,
         )
         result.repo = repo_url
         if stream:
@@ -601,7 +877,7 @@ def run_for_repo(
     from skills_setup import materialize_skills
 
     goal_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (goal_id or "adhoc").strip())[:48].strip("-") or "adhoc"
-    workspace_parent = Path(tempfile.mkdtemp(prefix=f"openhands-goal-{goal_slug}-"))
+    workspace_parent = create_project_workspace(goal_slug)
     repo_dir = workspace_parent / "repo"
     repo_url = normalize_repo_url(repo_url)
     clone_url = auth_repo_url(repo_url, github_token)
@@ -611,14 +887,17 @@ def run_for_repo(
         os.environ["GITHUB_TOKEN"] = github_token
         os.environ["GH_TOKEN"] = github_token
 
-    if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind"):
-        mode = f"workflow sandbox ({openhands_sandbox.get('kind')})"
+    effective_sandbox = _effective_openhands_sandbox(openhands_sandbox)
+
+    if isinstance(effective_sandbox, dict) and effective_sandbox.get("kind"):
+        mode = f"workflow sandbox ({effective_sandbox.get('kind')})"
     else:
         mode = "remote Docker runtime" if (os.environ.get("OPENHANDS_RUNTIME_HOST") or "").strip() else "local"
     log(f"OpenHands per-goal workspace ({mode}): {workspace_parent}")
 
     try:
         clone_repo(clone_url, base_branch, repo_dir)
+        _ensure_mount_writable(repo_dir)
     except subprocess.CalledProcessError as exc:
         return RepoRunResult(
             repo=repo_url,
@@ -636,6 +915,16 @@ def run_for_repo(
                 installed_skills = materialize_skills(repo_dir, skills)
                 if installed_skills:
                     log(f"Installed OpenHands skills: {', '.join(installed_skills)}")
+
+            repo_summary = run_repository_recon(
+                repo_url=repo_url,
+                base_branch=base_branch,
+                repo_dir=repo_dir,
+                model=model,
+                api_key=api_key,
+                openhands_sandbox=effective_sandbox,
+                on_log=on_log,
+            )
 
             log(f"Starting OpenHands agent (model={model})…")
             llm = build_llm(model=model, api_key=api_key)
@@ -659,36 +948,43 @@ def run_for_repo(
                 full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
                 log(full, slim_log_fields(merged, body))
 
-            workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
-            if isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "docker":
-                log(f"Using OpenHands RemoteWorkspace at {openhands_sandbox.get('runtime_host', '')}")
-            elif isinstance(openhands_sandbox, dict) and openhands_sandbox.get("kind") == "remote":
-                log("Using OpenHands APIRemoteWorkspace (hosted runtime API).")
-            elif os.environ.get("OPENHANDS_RUNTIME_HOST", "").strip():
-                log("Using OpenHands RemoteWorkspace (Docker runtime server).")
-            else:
-                log(f"Using OpenHands LocalWorkspace at {repo_dir}")
+            with _repo_cwd(repo_dir):
+                raw_workspace = resolve_openhands_workspace(repo_dir, effective_sandbox)
+                workspace, workspace_handle = activate_openhands_workspace(raw_workspace)
+                if isinstance(effective_sandbox, dict) and effective_sandbox.get("kind") == "docker":
+                    log("Using OpenHands DockerWorkspace (local Docker sandbox).")
+                elif isinstance(effective_sandbox, dict) and effective_sandbox.get("kind") == "remote":
+                    log("Using OpenHands APIRemoteWorkspace (hosted runtime API).")
+                elif os.environ.get("OPENHANDS_RUNTIME_HOST", "").strip():
+                    log("Using OpenHands RemoteWorkspace (Docker runtime server).")
+                else:
+                    log(f"Using OpenHands LocalWorkspace at {repo_dir}")
 
-            conversation = Conversation(
-                agent=agent,
-                workspace=workspace,
-                callbacks=[event_callback],
-                visualizer=None,
-            )
+                conversation = Conversation(
+                    agent=agent,
+                    workspace=workspace,
+                    callbacks=[event_callback],
+                    visualizer=None,
+                )
 
-            prompt = build_goal_prompt(goal, base_branch, feature_branch)
-            try:
-                conversation.send_message(prompt)
-                conversation.run()
-            finally:
+                prompt = build_goal_prompt(
+                    goal,
+                    base_branch,
+                    feature_branch,
+                    repo_summary=repo_summary,
+                )
                 try:
-                    conversation.close()
-                except Exception:
-                    pass
-                try:
-                    workspace.__exit__(None, None, None)
-                except Exception:
-                    pass
+                    conversation.send_message(prompt)
+                    conversation.run()
+                finally:
+                    try:
+                        conversation.close()
+                    except Exception:
+                        pass
+                    try:
+                        close_openhands_workspace(workspace_handle)
+                    except Exception:
+                        pass
 
             state = getattr(conversation, "state", None)
             events = getattr(state, "events", []) if state is not None else []

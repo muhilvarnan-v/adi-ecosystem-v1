@@ -6,7 +6,7 @@ import base64
 import re
 from typing import Any
 
-DEFAULT_REPO_MOUNT = "/workspace/repo"
+DEFAULT_REPO_MOUNT = "/workspace"
 
 
 def normalize_repo_url(url: str) -> str:

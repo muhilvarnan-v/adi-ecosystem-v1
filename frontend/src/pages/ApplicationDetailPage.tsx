@@ -748,12 +748,6 @@ function ApplicationKanban({
   onGoalExecuting,
   integrations,
   githubRepoLinked,
-  jiraIssues,
-  jiraSpaces,
-  jiraLoadError,
-  trelloCards,
-  zendeskTickets,
-  zendeskLoadError,
   workflowTemplates,
   onRefreshWorkflowTemplates,
 }: {
@@ -766,12 +760,6 @@ function ApplicationKanban({
   onGoalExecuting: (goal: Goal) => void;
   integrations: IntegrationStatus[];
   githubRepoLinked: boolean;
-  jiraIssues: ExternalIssue[];
-  jiraSpaces: JiraSpace[];
-  jiraLoadError?: string | null;
-  trelloCards: ExternalCard[];
-  zendeskTickets: ExternalIssue[];
-  zendeskLoadError?: string | null;
   workflowTemplates: WorkflowDefinition[];
   onRefreshWorkflowTemplates?: () => void | Promise<void>;
 }) {
@@ -782,10 +770,22 @@ function ApplicationKanban({
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [importTab, setImportTab] = useState<'manual' | 'jira' | 'trello' | 'zendesk'>('manual');
+  const [jiraIssues, setJiraIssues] = useState<ExternalIssue[]>([]);
+  const [jiraSpaces, setJiraSpaces] = useState<JiraSpace[]>([]);
+  const [jiraLoadError, setJiraLoadError] = useState<string | null>(null);
+  const [trelloCards, setTrelloCards] = useState<ExternalCard[]>([]);
+  const [zendeskTickets, setZendeskTickets] = useState<ExternalIssue[]>([]);
+  const [zendeskLoadError, setZendeskLoadError] = useState<string | null>(null);
+  const [jiraLoaded, setJiraLoaded] = useState(false);
+  const [trelloLoaded, setTrelloLoaded] = useState(false);
+  const [zendeskLoaded, setZendeskLoaded] = useState(false);
 
   const jiraConnected = integrations.find((i) => i.provider === 'jira')?.connected;
   const trelloConnected = integrations.find((i) => i.provider === 'trello')?.connected;
   const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
+  const jiraLoading = showCreateModal && importTab === 'jira' && jiraConnected && !jiraLoaded;
+  const trelloLoading = showCreateModal && importTab === 'trello' && trelloConnected && !trelloLoaded;
+  const zendeskLoading = showCreateModal && importTab === 'zendesk' && zendeskConnected && !zendeskLoaded;
 
   const applicationId = application.id;
   const appGoals =
@@ -805,6 +805,78 @@ function ApplicationKanban({
       document.body.style.overflow = prevOverflow;
     };
   }, [showCreateModal]);
+
+  useEffect(() => {
+    if (!showCreateModal || importTab !== 'jira' || !jiraConnected || jiraLoaded) return;
+    let cancelled = false;
+
+    async function loadJiraImportData() {
+      try {
+        const [issues, spaces] = await Promise.all([listJiraIssues(), listJiraSpaces()]);
+        if (cancelled) return;
+        setJiraIssues(issues);
+        setJiraSpaces(spaces);
+        setJiraLoadError(null);
+        setJiraLoaded(true);
+      } catch (e) {
+        if (cancelled) return;
+        setJiraIssues([]);
+        setJiraSpaces([]);
+        setJiraLoadError(e instanceof Error ? e.message : 'Failed to load Jira issues');
+      }
+    }
+
+    void loadJiraImportData();
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreateModal, importTab, jiraConnected, jiraLoaded]);
+
+  useEffect(() => {
+    if (!showCreateModal || importTab !== 'trello' || !trelloConnected || trelloLoaded) return;
+    let cancelled = false;
+
+    async function loadTrelloImportData() {
+      try {
+        const cards = await listTrelloCards();
+        if (cancelled) return;
+        setTrelloCards(cards);
+        setTrelloLoaded(true);
+      } catch {
+        if (cancelled) return;
+        setTrelloCards([]);
+      }
+    }
+
+    void loadTrelloImportData();
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreateModal, importTab, trelloConnected, trelloLoaded]);
+
+  useEffect(() => {
+    if (!showCreateModal || importTab !== 'zendesk' || !zendeskConnected || zendeskLoaded) return;
+    let cancelled = false;
+
+    async function loadZendeskImportData() {
+      try {
+        const tickets = await listZendeskTickets();
+        if (cancelled) return;
+        setZendeskTickets(tickets);
+        setZendeskLoadError(null);
+        setZendeskLoaded(true);
+      } catch (e) {
+        if (cancelled) return;
+        setZendeskTickets([]);
+        setZendeskLoadError(e instanceof Error ? e.message : 'Failed to load Zendesk tickets');
+      }
+    }
+
+    void loadZendeskImportData();
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreateModal, importTab, zendeskConnected, zendeskLoaded]);
 
   function closeCreateModal() {
     setShowCreateModal(false);
@@ -1181,19 +1253,31 @@ function ApplicationKanban({
         )}
 
         {importTab === 'jira' && (
-          <JiraImportPanel
-            issues={jiraIssues}
-            spaces={jiraSpaces}
-            loadError={jiraLoadError ?? null}
-            submitting={submitting}
-            importDisabled={!activeWorkflowId}
-            onImport={handleImportFromJira}
-          />
+          jiraLoading ? (
+            <div className="empty-state">
+              <LoadingIndicator />
+              <p className="muted">Loading Jira issues...</p>
+            </div>
+          ) : (
+            <JiraImportPanel
+              issues={jiraIssues}
+              spaces={jiraSpaces}
+              loadError={jiraLoadError ?? null}
+              submitting={submitting}
+              importDisabled={!activeWorkflowId}
+              onImport={handleImportFromJira}
+            />
+          )
         )}
 
         {importTab === 'trello' && (
           <div className="import-list">
-            {trelloCards.length === 0 ? (
+            {trelloLoading ? (
+              <div className="empty-state">
+                <LoadingIndicator />
+                <p className="muted">Loading Trello cards...</p>
+              </div>
+            ) : trelloCards.length === 0 ? (
               <p className="muted">No Trello cards found or still loading.</p>
             ) : (
               trelloCards.map((card) => (
@@ -1218,17 +1302,24 @@ function ApplicationKanban({
         )}
 
         {importTab === 'zendesk' && (
-          <JiraImportPanel
-            issues={zendeskTickets}
-            spaces={[]}
-            loadError={zendeskLoadError ?? null}
-            submitting={submitting}
-            importDisabled={!activeWorkflowId}
-            onImport={handleImportFromZendesk}
-            emptyMessage="No Zendesk tickets found."
-            searchPlaceholder="Search by ticket #, title, or status…"
-            resolveImportId={(issue) => issue.id}
-          />
+          zendeskLoading ? (
+            <div className="empty-state">
+              <LoadingIndicator />
+              <p className="muted">Loading Zendesk tickets...</p>
+            </div>
+          ) : (
+            <JiraImportPanel
+              issues={zendeskTickets}
+              spaces={[]}
+              loadError={zendeskLoadError ?? null}
+              submitting={submitting}
+              importDisabled={!activeWorkflowId}
+              onImport={handleImportFromZendesk}
+              emptyMessage="No Zendesk tickets found."
+              searchPlaceholder="Search by ticket #, title, or status…"
+              resolveImportId={(issue) => issue.id}
+            />
+          )
         )}
       </div>
     </div>
@@ -1305,12 +1396,6 @@ export function ApplicationDetailPage() {
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
   const [reposLoadError, setReposLoadError] = useState<string | null>(null);
-  const [jiraIssues, setJiraIssues] = useState<ExternalIssue[]>([]);
-  const [jiraSpaces, setJiraSpaces] = useState<JiraSpace[]>([]);
-  const [jiraLoadError, setJiraLoadError] = useState<string | null>(null);
-  const [trelloCards, setTrelloCards] = useState<ExternalCard[]>([]);
-  const [zendeskTickets, setZendeskTickets] = useState<ExternalIssue[]>([]);
-  const [zendeskLoadError, setZendeskLoadError] = useState<string | null>(null);
   const [selfHealingIncidents, setSelfHealingIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
   const [selfHealingLoadErrors, setSelfHealingLoadErrors] = useState<Record<string, string | null>>({});
   const [selfHealingCiIncidents, setSelfHealingCiIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
@@ -1355,110 +1440,6 @@ export function ApplicationDetailPage() {
       setGoals(goalsData);
       setIntegrations(integrationsData);
       setWorkflowTemplates(wfRes.workflows ?? []);
-
-      const githubOn = integrationsData.find((i) => i.provider === 'github')?.connected;
-      const jiraOn = integrationsData.find((i) => i.provider === 'jira')?.connected;
-      const trelloOn = integrationsData.find((i) => i.provider === 'trello')?.connected;
-      const zendeskOn = integrationsData.find((i) => i.provider === 'zendesk')?.connected;
-      const circleciOn = integrationsData.find((i) => i.provider === 'circleci')?.connected;
-
-      if (githubOn) {
-        try {
-          setGithubRepos(await listGitHubRepos());
-          setReposLoadError(null);
-        } catch (e) {
-          setGithubRepos([]);
-          setReposLoadError(
-            e instanceof Error ? e.message : 'Failed to load GitHub repositories',
-          );
-        }
-      } else {
-        setGithubRepos([]);
-        setReposLoadError(null);
-      }
-
-      if (jiraOn) {
-        try {
-          const [issues, spaces] = await Promise.all([listJiraIssues(), listJiraSpaces()]);
-          setJiraIssues(issues);
-          setJiraSpaces(spaces);
-          setJiraLoadError(null);
-        } catch (e) {
-          setJiraIssues([]);
-          setJiraSpaces([]);
-          setJiraLoadError(e instanceof Error ? e.message : 'Failed to load Jira issues');
-        }
-      } else {
-        setJiraIssues([]);
-        setJiraSpaces([]);
-        setJiraLoadError(null);
-      }
-      if (trelloOn) {
-        try {
-          setTrelloCards(await listTrelloCards());
-        } catch {
-          setTrelloCards([]);
-        }
-      } else {
-        setTrelloCards([]);
-      }
-      if (zendeskOn) {
-        try {
-          setZendeskTickets(await listZendeskTickets());
-          setZendeskLoadError(null);
-        } catch (e) {
-          setZendeskTickets([]);
-          setZendeskLoadError(e instanceof Error ? e.message : 'Failed to load Zendesk tickets');
-        }
-      } else {
-        setZendeskTickets([]);
-        setZendeskLoadError(null);
-      }
-
-      const incidentEntries = await Promise.all(
-        appsData.map(async (app) => {
-          try {
-            const incidents = await listSelfHealingIncidents(app.id);
-            return [app.id, incidents, null] as const;
-          } catch (e) {
-            return [
-              app.id,
-              [] as SelfHealingIncident[],
-              e instanceof Error ? e.message : 'Failed to load self-healing incidents',
-            ] as const;
-          }
-        }),
-      );
-      setSelfHealingIncidents(
-        Object.fromEntries(incidentEntries.map(([appId, incidents]) => [appId, incidents])),
-      );
-      setSelfHealingLoadErrors(
-        Object.fromEntries(incidentEntries.map(([appId, , loadError]) => [appId, loadError])),
-      );
-
-      const ciEntries = await Promise.all(
-        appsData.map(async (app) => {
-          if (!circleciOn) {
-            return [app.id, [] as SelfHealingIncident[], null] as const;
-          }
-          try {
-            const rows = await listSelfHealingCiFailures(app.id);
-            return [app.id, rows, null] as const;
-          } catch (e) {
-            return [
-              app.id,
-              [] as SelfHealingIncident[],
-              e instanceof Error ? e.message : 'Failed to load CI/CD failures',
-            ] as const;
-          }
-        }),
-      );
-      setSelfHealingCiIncidents(
-        Object.fromEntries(ciEntries.map(([appId, incidents]) => [appId, incidents])),
-      );
-      setSelfHealingCiLoadErrors(
-        Object.fromEntries(ciEntries.map(([appId, , loadError]) => [appId, loadError])),
-      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load applications');
     } finally {
@@ -1473,6 +1454,108 @@ export function ApplicationDetailPage() {
   useEffect(() => {
     setActiveViewTab('dashboard');
   }, [applicationId]);
+
+  useEffect(() => {
+    const viewingConcreteApp = !!applicationId && applicationId !== APPLICATION_UNASSIGNED_SLUG;
+    if (!githubConnected) {
+      setGithubRepos([]);
+      setReposLoadError(null);
+      return;
+    }
+    if (!viewingConcreteApp && !showAppModal) return;
+    if (githubRepos.length > 0) return;
+
+    let cancelled = false;
+    async function loadGithubReposIfNeeded() {
+      try {
+        const repos = await listGitHubRepos();
+        if (cancelled) return;
+        setGithubRepos(repos);
+        setReposLoadError(null);
+      } catch (e) {
+        if (cancelled) return;
+        setGithubRepos([]);
+        setReposLoadError(e instanceof Error ? e.message : 'Failed to load GitHub repositories');
+      }
+    }
+
+    void loadGithubReposIfNeeded();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, githubConnected, githubRepos.length, showAppModal]);
+
+  useEffect(() => {
+    const currentAppId =
+      applicationId && applicationId !== APPLICATION_UNASSIGNED_SLUG ? applicationId : null;
+    const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
+    if (!currentAppId || activeViewTab !== 'self_healing') return;
+    const appId = currentAppId;
+    if (!zendeskConnected) {
+      setSelfHealingIncidents((prev) => ({ ...prev, [appId]: [] }));
+      setSelfHealingLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(selfHealingIncidents, appId)) return;
+
+    let cancelled = false;
+    async function loadSelfHealingIncidentsForCurrentApp() {
+      try {
+        const incidents = await listSelfHealingIncidents(appId);
+        if (cancelled) return;
+        setSelfHealingIncidents((prev) => ({ ...prev, [appId]: incidents }));
+        setSelfHealingLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      } catch (e) {
+        if (cancelled) return;
+        setSelfHealingIncidents((prev) => ({ ...prev, [appId]: [] }));
+        setSelfHealingLoadErrors((prev) => ({
+          ...prev,
+          [appId]: e instanceof Error ? e.message : 'Failed to load self-healing incidents',
+        }));
+      }
+    }
+
+    void loadSelfHealingIncidentsForCurrentApp();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, activeViewTab, integrations, selfHealingIncidents]);
+
+  useEffect(() => {
+    const currentAppId =
+      applicationId && applicationId !== APPLICATION_UNASSIGNED_SLUG ? applicationId : null;
+    const circleciConnected = integrations.find((i) => i.provider === 'circleci')?.connected;
+    if (!currentAppId || activeViewTab !== 'self_healing') return;
+    const appId = currentAppId;
+    if (!circleciConnected) {
+      setSelfHealingCiIncidents((prev) => ({ ...prev, [appId]: [] }));
+      setSelfHealingCiLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(selfHealingCiIncidents, appId)) return;
+
+    let cancelled = false;
+    async function loadSelfHealingCiForCurrentApp() {
+      try {
+        const rows = await listSelfHealingCiFailures(appId);
+        if (cancelled) return;
+        setSelfHealingCiIncidents((prev) => ({ ...prev, [appId]: rows }));
+        setSelfHealingCiLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      } catch (e) {
+        if (cancelled) return;
+        setSelfHealingCiIncidents((prev) => ({ ...prev, [appId]: [] }));
+        setSelfHealingCiLoadErrors((prev) => ({
+          ...prev,
+          [appId]: e instanceof Error ? e.message : 'Failed to load CI/CD failures',
+        }));
+      }
+    }
+
+    void loadSelfHealingCiForCurrentApp();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, activeViewTab, integrations, selfHealingCiIncidents]);
 
   useEffect(() => {
     if (!showAppModal) return;
@@ -1875,12 +1958,6 @@ export function ApplicationDetailPage() {
             onGoalExecuting={openGoalExecution}
             integrations={integrations}
             githubRepoLinked={false}
-            jiraIssues={jiraIssues}
-            jiraSpaces={jiraSpaces}
-            jiraLoadError={jiraLoadError}
-            trelloCards={trelloCards}
-            zendeskTickets={zendeskTickets}
-            zendeskLoadError={zendeskLoadError}
             workflowTemplates={workflowTemplates}
             onRefreshWorkflowTemplates={refreshWorkflowTemplates}
           />
@@ -1964,12 +2041,6 @@ export function ApplicationDetailPage() {
                 onGoalExecuting={openGoalExecution}
                 integrations={integrations}
                 githubRepoLinked={!!currentApp.github_repo_url}
-                jiraIssues={jiraIssues}
-                jiraSpaces={jiraSpaces}
-                jiraLoadError={jiraLoadError}
-                trelloCards={trelloCards}
-                zendeskTickets={zendeskTickets}
-                zendeskLoadError={zendeskLoadError}
                 workflowTemplates={workflowTemplates}
                 onRefreshWorkflowTemplates={refreshWorkflowTemplates}
               />

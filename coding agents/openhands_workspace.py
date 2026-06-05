@@ -3,50 +3,25 @@
 from __future__ import annotations
 
 import os
-import socket
-import sys
+import platform
+import inspect
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from openhands.sdk.workspace.base import BaseWorkspace
 
 
-def _host_is_reachable(host_url: str) -> bool:
-    parsed = urlparse(host_url)
-    hostname = parsed.hostname
-    if not hostname:
-        return False
-    if parsed.port:
-        port = parsed.port
-    elif parsed.scheme == "https":
-        port = 443
-    else:
-        port = 80
-    try:
-        with socket.create_connection((hostname, port), timeout=1.5):
-            return True
-    except OSError:
-        return False
+def resolve_docker_platform() -> str:
+    """Pick native Linux arch unless explicitly overridden."""
+    override = (os.environ.get("OPENHANDS_DOCKER_PLATFORM") or "").strip()
+    if override:
+        return override
 
-
-def _local_workspace(repo_dir: Path):
-    from openhands.sdk.workspace import LocalWorkspace
-
-    return LocalWorkspace(working_dir=repo_dir)
-
-
-def _fallback_to_local(repo_dir: Path, host: str, source: str):
-    print(
-        (
-            f"[warn] OpenHands runtime host is unreachable ({host}) from {source}. "
-            "Falling back to LocalWorkspace."
-        ),
-        file=sys.stderr,
-        flush=True,
-    )
-    return _local_workspace(repo_dir)
+    machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return "linux/arm64"
+    return "linux/amd64"
 
 
 def resolve_openhands_workspace(
@@ -65,16 +40,29 @@ def resolve_openhands_workspace(
     if spec:
         kind = str(spec.get("kind") or "").strip().lower()
         if kind == "docker":
-            from openhands.sdk.workspace import Workspace
+            try:
+                from openhands.workspace import DockerWorkspace
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    'Docker sandbox requires the "openhands-workspace" package. '
+                    'Install: pip install "openhands-workspace==1.24.0"'
+                ) from exc
 
-            host = str(spec.get("runtime_host") or "").strip().rstrip("/")
-            if not host:
-                port = int(spec.get("host_port") or 8010)
-                host = f"http://127.0.0.1:{port}"
-            if not _host_is_reachable(host):
-                return _fallback_to_local(repo_dir, host, "workflow sandbox")
-            api_key = (spec.get("runtime_api_key") or "").strip() or None
-            return Workspace(working_dir=str(repo_dir), host=host, api_key=api_key)
+            image = str(spec.get("server_image") or "").strip() or "ghcr.io/openhands/agent-server:latest-python"
+            docker_platform = resolve_docker_platform()
+            workspace_kwargs = {
+                "server_image": image,
+                "workspace_dir": str(repo_dir),
+                "platform": docker_platform,
+            }
+            try:
+                params = inspect.signature(DockerWorkspace).parameters
+            except (TypeError, ValueError):
+                params = {}
+            if "volumes" in params:
+                workspace_kwargs["volumes"] = [f"{repo_dir}:/workspace:rw"]  # explicit rw to avoid root-owned files in some Docker versions
+
+            return DockerWorkspace(**workspace_kwargs)
 
         if kind == "remote":
             try:
@@ -100,9 +88,25 @@ def resolve_openhands_workspace(
     if host:
         from openhands.sdk.workspace import Workspace
 
-        if not _host_is_reachable(host):
-            return _fallback_to_local(repo_dir, host, "OPENHANDS_RUNTIME_HOST")
         api_key = (os.environ.get("OPENHANDS_RUNTIME_API_KEY") or "").strip() or None
         return Workspace(working_dir=str(repo_dir), host=host, api_key=api_key)
 
-    return _local_workspace(repo_dir)
+    from openhands.sdk.workspace import LocalWorkspace
+
+    return LocalWorkspace(working_dir=repo_dir)
+
+
+def activate_openhands_workspace(workspace: Any) -> tuple[Any, Any]:
+    """Enter workspace context when available and return (active_workspace, close_handle)."""
+    enter = getattr(workspace, "__enter__", None)
+    if callable(enter):
+        active = enter()
+        return (active if active is not None else workspace), workspace
+    return workspace, workspace
+
+
+def close_openhands_workspace(workspace_handle: Any) -> None:
+    """Best-effort context cleanup for workspaces created/entered above."""
+    exit_fn = getattr(workspace_handle, "__exit__", None)
+    if callable(exit_fn):
+        exit_fn(None, None, None)

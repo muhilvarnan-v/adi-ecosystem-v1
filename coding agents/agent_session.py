@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from openhands_workspace import resolve_openhands_workspace
+from openhands_workspace import activate_openhands_workspace, resolve_openhands_workspace
 from run_multi_repo import (
     build_llm,
     compose_structured_log,
@@ -17,6 +19,26 @@ from run_multi_repo import (
     slim_log_fields,
 )
 from skills_setup import materialize_skills
+
+
+@contextmanager
+def _repo_cwd(repo_dir: Path):
+    """Run OpenHands setup from repo cwd so SDK git probes resolve correctly."""
+    previous = Path.cwd()
+    changed = False
+    try:
+        os.chdir(repo_dir)
+        changed = True
+    except Exception:
+        changed = False
+    try:
+        yield
+    finally:
+        if changed:
+            try:
+                os.chdir(previous)
+            except Exception:
+                pass
 
 
 def build_mcp_config(mcp_servers: list[dict[str, Any]] | None) -> dict[str, Any]:
@@ -125,20 +147,22 @@ def create_agent_and_conversation(
     if system_prompt:
         agent_kwargs["system_prompt"] = system_prompt
 
-    agent = Agent(**agent_kwargs)
+    with _repo_cwd(repo_dir):
+        agent = Agent(**agent_kwargs)
 
-    def event_callback(event: Any) -> None:
-        meta = openhands_event_meta(event)
-        if not meta or not on_log:
-            return
-        full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
-        on_log(full, slim_log_fields(merged, body))
+        def event_callback(event: Any) -> None:
+            meta = openhands_event_meta(event)
+            if not meta or not on_log:
+                return
+            full, body, merged = compose_structured_log(current_workflow_agent_context(), meta)
+            on_log(full, slim_log_fields(merged, body))
 
-    workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
-    conversation = Conversation(
-        agent=agent,
-        workspace=workspace,
-        callbacks=[event_callback],
-        visualizer=None,
-    )
-    return agent, conversation, workspace
+        raw_workspace = resolve_openhands_workspace(repo_dir, openhands_sandbox)
+        workspace, workspace_handle = activate_openhands_workspace(raw_workspace)
+        conversation = Conversation(
+            agent=agent,
+            workspace=workspace,
+            callbacks=[event_callback],
+            visualizer=None,
+        )
+    return agent, conversation, workspace_handle
