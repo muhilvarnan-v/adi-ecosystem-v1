@@ -155,7 +155,15 @@ async def list_application_incidents(db, user_id: str, application_id: str) -> l
         raise HTTPException(status_code=400, detail="Zendesk is not connected")
 
     zendesk = ZendeskOAuthService(get_settings())
-    tokens = await zendesk.get_valid_tokens(integration["tokens"])
+    try:
+        tokens = await zendesk.get_valid_tokens(integration["tokens"])
+    except Exception as exc:
+        # Token refresh failed (revoked/expired grant, or missing client creds).
+        # Surface a reconnect hint rather than a raw 500.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Zendesk session could not be refreshed; please reconnect Zendesk. ({exc})",
+        ) from exc
     subdomain = tokens.get("subdomain", "")
     try:
         tickets = await zendesk.list_tickets(tokens)
