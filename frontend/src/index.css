@@ -1529,6 +1529,26 @@ textarea {
   color: #2f6d3f;
 }
 
+.badge-severity-critical {
+  background: rgba(197, 48, 48, 0.14);
+  color: #c53030;
+}
+
+.badge-severity-high {
+  background: rgba(214, 158, 46, 0.16);
+  color: #9a6a00;
+}
+
+.badge-severity-medium {
+  background: rgba(0, 95, 204, 0.12);
+  color: #005fcc;
+}
+
+.badge-severity-low {
+  background: rgba(107, 158, 120, 0.2);
+  color: #2f6d3f;
+}
+
 .self-healing-incident-actions {
   display: flex;
   align-items: center;

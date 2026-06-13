@@ -27,6 +27,7 @@ class GoalSource(str, Enum):
     ZENDESK = "zendesk"
     CIRCLECI = "circleci"
     SLA = "sla"
+    WIZ = "wiz"
 
 
 class GoalStatus(str, Enum):
@@ -108,6 +109,20 @@ class GoalFromTrello(BaseModel):
 
 class GoalFromZendesk(BaseModel):
     ticket_id: str = Field(..., min_length=1, description="Zendesk ticket ID")
+    application_id: str = Field(..., min_length=1)
+    workflow_id: str = Field(..., min_length=1, max_length=80)
+    workflow_roles: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("workflow_roles", mode="before")
+    @classmethod
+    def validate_workflow_roles(cls, v: object) -> dict[str, str]:
+        if v is None or not isinstance(v, dict):
+            return {}
+        return _normalize_workflow_roles(v)
+
+
+class GoalFromWiz(BaseModel):
+    issue_id: str = Field(..., min_length=1, description="Wiz issue id")
     application_id: str = Field(..., min_length=1)
     workflow_id: str = Field(..., min_length=1, max_length=80)
     workflow_roles: dict[str, str] = Field(default_factory=dict)

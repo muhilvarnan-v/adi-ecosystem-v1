@@ -7,6 +7,7 @@ from app.schemas.goal import (
     GoalExecutionStatus,
     GoalFromJira,
     GoalFromTrello,
+    GoalFromWiz,
     GoalFromZendesk,
     GoalResponse,
     GoalSource,
@@ -23,6 +24,7 @@ from app.services.goal_execution import (
     schedule_goal_resume,
 )
 from app.services.zendesk_goal import create_zendesk_goal_from_ticket_fields
+from app.services.self_healing import create_wiz_goal_from_issue_fields
 from app.services.workflow_config import (
     WORKFLOW_ROLES,
     normalize_workflow_steps,
@@ -481,6 +483,36 @@ async def create_goal_from_zendesk(body: GoalFromZendesk, user_id: str = Depends
         subdomain=subdomain,
         workflow_id=body.workflow_id,
         workflow_roles=body.workflow_roles,
+    )
+    return _to_response(row)
+
+
+@router.post("/from/wiz", response_model=GoalResponse, status_code=201)
+def create_goal_from_wiz(body: GoalFromWiz, user_id: str = Depends(get_user_id)):
+    db = get_firestore()
+    app = db.get_application(body.application_id, user_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    issue = next(
+        (
+            i
+            for i in (app.get("security_issues") or [])
+            if isinstance(i, dict) and str(i.get("id")) == body.issue_id
+        ),
+        None,
+    )
+    if not issue:
+        raise HTTPException(
+            status_code=404, detail="Security issue not found for this application."
+        )
+    row = create_wiz_goal_from_issue_fields(
+        db,
+        user_id=user_id,
+        application_id=body.application_id,
+        issue=issue,
+        workflow_id=body.workflow_id,
+        workflow_roles=body.workflow_roles,
+        dedupe=True,
     )
     return _to_response(row)
 

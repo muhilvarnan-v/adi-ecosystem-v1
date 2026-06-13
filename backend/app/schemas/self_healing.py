@@ -18,7 +18,7 @@ class SelfHealingIncident(BaseModel):
     goal_status: GoalStatus | None = None
     execution_status: GoalExecutionStatus | None = None
     pr_url: str | None = None
-    kind: Literal["support", "ci_cd", "sla_breach"] = "support"
+    kind: Literal["support", "ci_cd", "sla_breach", "security"] = "support"
 
 
 class ZendeskWebhookResult(BaseModel):
@@ -44,3 +44,8 @@ class SLAWebhookResult(BaseModel):
     received_at: datetime
     ignored: bool = False
     ignore_reason: str | None = None
+
+
+class WizIngestResult(BaseModel):
+    stored: int = 0
+    received_at: datetime

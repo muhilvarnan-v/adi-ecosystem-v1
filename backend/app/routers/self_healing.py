@@ -8,6 +8,7 @@ from app.schemas.self_healing import (
     CircleCIWebhookResult,
     SLAWebhookResult,
     SelfHealingIncident,
+    WizIngestResult,
     ZendeskWebhookResult,
 )
 from app.services.firestore import get_firestore
@@ -17,7 +18,9 @@ from app.services.self_healing import (
     handle_zendesk_webhook,
     list_application_ci_incidents,
     list_application_incidents,
+    list_application_security_issues,
     list_application_sla_incidents,
+    store_wiz_security_issues,
 )
 
 router = APIRouter(tags=["self-healing"])
@@ -48,6 +51,28 @@ def list_ci_failures(application_id: str, user_id: str = Depends(get_user_id)):
 def list_sla_breaches(application_id: str, user_id: str = Depends(get_user_id)):
     db = get_firestore()
     return list_application_sla_incidents(db, user_id, application_id)
+
+
+@router.get(
+    "/applications/{application_id}/self-healing/security-issues",
+    response_model=list[SelfHealingIncident],
+)
+def list_security_issues(application_id: str, user_id: str = Depends(get_user_id)):
+    db = get_firestore()
+    return list_application_security_issues(db, user_id, application_id)
+
+
+@router.post(
+    "/applications/{application_id}/self-healing/security-issues",
+    response_model=WizIngestResult,
+)
+def ingest_security_issues(
+    application_id: str,
+    payload: dict[str, Any] = Body(default_factory=dict),
+    user_id: str = Depends(get_user_id),
+):
+    db = get_firestore()
+    return store_wiz_security_issues(db, user_id, application_id, payload)
 
 
 @router.post("/self-healing/zendesk/webhook", response_model=ZendeskWebhookResult)

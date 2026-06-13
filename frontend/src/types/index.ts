@@ -36,7 +36,7 @@ export interface Application {
   updated_at: string;
 }
 
-export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk' | 'circleci' | 'sla';
+export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk' | 'circleci' | 'sla' | 'wiz';
 export type GoalStatus = 'backlog' | 'in_progress' | 'done';
 
 export type GoalExecutionStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -144,7 +144,7 @@ export interface ExternalCard {
   board_name: string | null;
 }
 
-export type SelfHealingIncidentKind = 'support' | 'ci_cd' | 'sla_breach';
+export type SelfHealingIncidentKind = 'support' | 'ci_cd' | 'sla_breach' | 'security';
 
 export interface SelfHealingIncident {
   id: string;

@@ -12,6 +12,7 @@ import {
   createGoal,
   createGoalFromJira,
   createGoalFromTrello,
+  createGoalFromWiz,
   createGoalFromZendesk,
   deleteGoal,
   listGoals,
@@ -32,6 +33,7 @@ import {
 import {
   listSelfHealingCiFailures,
   listSelfHealingIncidents,
+  listSelfHealingSecurityIssues,
   listSelfHealingSlaBreaches,
 } from '../api/selfHealing';
 import { ExternalLinkIcon, GitHubIcon, PlusIcon, TrashIcon } from '../components/Icons';
@@ -65,7 +67,7 @@ const KANBAN_LANES: { id: GoalStatus; label: string }[] = [
 ];
 
 type ApplicationViewTab = 'delivery_goals' | 'self_healing' | 'infrastructure';
-type SelfHealingViewTab = 'incidents' | 'ci_cd' | 'sla_breach';
+type SelfHealingViewTab = 'incidents' | 'ci_cd' | 'sla_breach' | 'security';
 
 const STANDARD_WORKFLOW_NAME = 'Standard workflow';
 
@@ -591,10 +593,12 @@ function SelfHealingSection({
   incidents,
   ciIncidents,
   slaIncidents,
+  securityIssues,
   goals,
   loadError,
   ciLoadError,
   slaLoadError,
+  securityLoadError,
   integrations,
   workflowTemplates,
   saving,
@@ -606,10 +610,12 @@ function SelfHealingSection({
   incidents: SelfHealingIncident[];
   ciIncidents: SelfHealingIncident[];
   slaIncidents: SelfHealingIncident[];
+  securityIssues: SelfHealingIncident[];
   goals: Goal[];
   loadError: string | null;
   ciLoadError: string | null;
   slaLoadError: string | null;
+  securityLoadError: string | null;
   integrations: IntegrationStatus[];
   workflowTemplates: WorkflowDefinition[];
   saving: boolean;
@@ -661,11 +667,20 @@ function SelfHealingSection({
     unknownWorkflow ||
     missingDevelop ||
     missingDeploy;
+  // Security issues have no dedicated integration; gate only on GitHub + workflow.
+  const securityFixDisabled =
+    !githubConnected ||
+    !application.github_repo_url ||
+    missingWorkflow ||
+    unknownWorkflow ||
+    missingDevelop ||
+    missingDeploy;
   const [activeViewTab, setActiveViewTab] = useState<SelfHealingViewTab>('incidents');
   const viewTabs: { id: SelfHealingViewTab; label: string; count: number }[] = [
     { id: 'incidents', label: 'Incidents', count: incidents.length },
     { id: 'ci_cd', label: 'CI/CD failures', count: ciIncidents.length },
     { id: 'sla_breach', label: 'SLA Breach', count: slaIncidents.length },
+    { id: 'security', label: 'Security Issues', count: securityIssues.length },
   ];
   const supportFixUnavailableReason =
     !zendeskConnected
@@ -716,9 +731,33 @@ function SelfHealingSection({
                 ? 'The workflow must include a Deployment agent.'
                 : undefined;
 
+  const securityFixUnavailableReason = !githubConnected
+    ? 'Connect GitHub before auto-fix can open PRs.'
+    : !application.github_repo_url
+      ? 'Link a GitHub repository before auto-fix can run.'
+      : unknownWorkflow
+        ? 'The configured self-healing workflow no longer exists.'
+        : missingWorkflow
+          ? 'Create the standard workflow or keep only one saved workflow.'
+          : missingDevelop
+            ? 'The workflow must include a Development agent.'
+            : missingDeploy
+              ? 'The workflow must include a Deployment agent.'
+              : undefined;
+
   function incidentGoal(incident: SelfHealingIncident): Goal | undefined {
     if (incident.kind === 'ci_cd' || incident.kind === 'sla_breach') {
       return goals.find((g) => g.id === incident.id);
+    }
+    if (incident.kind === 'security') {
+      if (incident.goal_id) return goals.find((g) => g.id === incident.goal_id);
+      const externalId = incident.key ?? `wiz:${incident.id}`;
+      return goals.find(
+        (g) =>
+          g.application_id === application.id &&
+          g.source === 'wiz' &&
+          g.external_id === externalId,
+      );
     }
     if (incident.goal_id) {
       return goals.find((g) => g.id === incident.goal_id);
@@ -742,6 +781,9 @@ function SelfHealingSection({
       {activeViewTab === 'incidents' && loadError && <p className="alert alert-error">{loadError}</p>}
       {activeViewTab === 'ci_cd' && ciLoadError && <p className="alert alert-error">{ciLoadError}</p>}
       {activeViewTab === 'sla_breach' && slaLoadError && <p className="alert alert-error">{slaLoadError}</p>}
+      {activeViewTab === 'security' && securityLoadError && (
+        <p className="alert alert-error">{securityLoadError}</p>
+      )}
 
       <div className="self-healing-simple-header">
         <p className="muted small">
@@ -1060,6 +1102,110 @@ function SelfHealingSection({
                                     ? 'Retry fix'
                                     : 'Open run'
                                   : 'Open run'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeViewTab === 'security' && (
+            <div className="self-healing-incidents" role="tabpanel">
+              {securityIssues.length === 0 ? (
+                <p className="muted small self-healing-empty">
+                  No security issues yet. POST a Wiz issues payload to this application to populate
+                  this tab.
+                </p>
+              ) : (
+                <div className="import-list self-healing-incident-list">
+                  {securityIssues.map((incident) => {
+                    const goal = incidentGoal(incident);
+                    const isFixing = autoFixingIncidentId === fixingKey(incident);
+                    const execStatus = goal?.execution_status ?? incident.execution_status;
+                    const prUrl = goal?.pr_url ?? incident.pr_url;
+                    const severity = (incident.priority ?? '').toLowerCase();
+                    const issueStatus = (incident.status ?? '').toLowerCase();
+                    const isRunning = execStatus === 'queued' || execStatus === 'running';
+                    const isCompleted = execStatus === 'completed';
+                    const isFailed = execStatus === 'failed';
+
+                    let fixState: 'running' | 'fixed' | 'created' | 'failed' | 'idle';
+                    if (isRunning) fixState = 'running';
+                    else if (isCompleted && prUrl) fixState = 'fixed';
+                    else if (isCompleted) fixState = 'created';
+                    else if (isFailed) fixState = 'failed';
+                    else fixState = 'idle';
+
+                    return (
+                      <div key={incident.id} className="import-item self-healing-incident">
+                        <div className="import-item-content">
+                          <div className="self-healing-incident-title">
+                            {severity && (
+                              <span className={`badge incident-ticket-badge badge-severity-${severity}`}>
+                                {severity.toUpperCase()}
+                              </span>
+                            )}
+                            <span>{incident.title}</span>
+                          </div>
+                          {incident.url && (
+                            <a
+                              href={incident.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="muted small self-healing-ci-circle-link"
+                            >
+                              Open in Wiz
+                            </a>
+                          )}
+                        </div>
+                        <div className="self-healing-incident-actions">
+                          {incident.status && (
+                            <span className={`badge incident-ticket-badge badge-status-${issueStatus || 'unknown'}`}>
+                              {incident.status}
+                            </span>
+                          )}
+                          {prUrl && (
+                            <a
+                              href={prUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost btn-sm self-healing-pr-link"
+                            >
+                              <ExternalLinkIcon />
+                              View PR
+                            </a>
+                          )}
+                          {fixState === 'running' && (
+                            <span className="status-pill status-pill-running">
+                              <span className="status-dot" />
+                              Fixing…
+                            </span>
+                          )}
+                          {fixState === 'fixed' && (
+                            <span className="status-pill status-pill-fixed">Merged / PR ready</span>
+                          )}
+                          {fixState === 'created' && (
+                            <span className="status-pill status-pill-created">Fix created</span>
+                          )}
+                          {(fixState === 'idle' || fixState === 'failed') && (
+                            <button
+                              type="button"
+                              className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+                              disabled={securityFixDisabled || isFixing}
+                              title={securityFixDisabled ? securityFixUnavailableReason : undefined}
+                              onClick={() => onAutoFix(application, incident)}
+                            >
+                              {isFixing
+                                ? 'Starting…'
+                                : fixState === 'failed'
+                                  ? goal?.resumable
+                                    ? 'Retry fix'
+                                    : 'Open run'
+                                  : 'Fix'}
                             </button>
                           )}
                         </div>
@@ -1740,6 +1886,8 @@ export function ApplicationDetailPage() {
   const [selfHealingCiLoadErrors, setSelfHealingCiLoadErrors] = useState<Record<string, string | null>>({});
   const [selfHealingSlaIncidents, setSelfHealingSlaIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
   const [selfHealingSlaLoadErrors, setSelfHealingSlaLoadErrors] = useState<Record<string, string | null>>({});
+  const [selfHealingSecurityIssues, setSelfHealingSecurityIssues] = useState<Record<string, SelfHealingIncident[]>>({});
+  const [selfHealingSecurityLoadErrors, setSelfHealingSecurityLoadErrors] = useState<Record<string, string | null>>({});
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1933,6 +2081,38 @@ export function ApplicationDetailPage() {
     };
   }, [applicationId, activeViewTab, integrations, selfHealingSlaIncidents]);
 
+  // Security issues (Wiz) have no integration to gate on — load whenever the
+  // self-healing view is active and we haven't cached this app yet.
+  useEffect(() => {
+    const currentAppId =
+      applicationId && applicationId !== APPLICATION_UNASSIGNED_SLUG ? applicationId : null;
+    if (!currentAppId || activeViewTab !== 'self_healing') return;
+    const appId = currentAppId;
+    if (Object.prototype.hasOwnProperty.call(selfHealingSecurityIssues, appId)) return;
+
+    let cancelled = false;
+    async function loadSelfHealingSecurityForCurrentApp() {
+      try {
+        const rows = await listSelfHealingSecurityIssues(appId);
+        if (cancelled) return;
+        setSelfHealingSecurityIssues((prev) => ({ ...prev, [appId]: rows }));
+        setSelfHealingSecurityLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      } catch (e) {
+        if (cancelled) return;
+        setSelfHealingSecurityIssues((prev) => ({ ...prev, [appId]: [] }));
+        setSelfHealingSecurityLoadErrors((prev) => ({
+          ...prev,
+          [appId]: e instanceof Error ? e.message : 'Failed to load security issues',
+        }));
+      }
+    }
+
+    void loadSelfHealingSecurityForCurrentApp();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, activeViewTab, selfHealingSecurityIssues]);
+
   useEffect(() => {
     if (!showAppModal) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -2034,6 +2214,20 @@ export function ApplicationDetailPage() {
     }
   }
 
+  async function refreshSelfHealingSecurityIssues(applicationId: string) {
+    setSelfHealingSecurityLoadErrors((prev) => ({ ...prev, [applicationId]: null }));
+    try {
+      const rows = await listSelfHealingSecurityIssues(applicationId);
+      setSelfHealingSecurityIssues((prev) => ({ ...prev, [applicationId]: rows }));
+    } catch (e) {
+      setSelfHealingSecurityIssues((prev) => ({ ...prev, [applicationId]: [] }));
+      setSelfHealingSecurityLoadErrors((prev) => ({
+        ...prev,
+        [applicationId]: e instanceof Error ? e.message : 'Failed to load security issues',
+      }));
+    }
+  }
+
   async function handleSelfHealingSettingsChange(
     applicationId: string,
     updates: {
@@ -2053,6 +2247,82 @@ export function ApplicationDetailPage() {
   }
 
   async function handleSelfHealingAutoFix(application: Application, incident: SelfHealingIncident) {
+    if (incident.kind === 'security') {
+      const externalId = incident.key ?? `wiz:${incident.id}`;
+      const existing = incident.goal_id
+        ? goals.find((g) => g.id === incident.goal_id)
+        : goals.find(
+            (g) =>
+              g.application_id === application.id &&
+              g.source === 'wiz' &&
+              g.external_id === externalId,
+          );
+      const key = `${application.id}:${incident.id}:security`;
+      if (existing) {
+        setAutoFixingIncident(key);
+        setError(null);
+        try {
+          if (existing.execution_status === 'failed' && existing.resumable) {
+            const updated = await resumeGoal(existing.id);
+            setGoals((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
+            await refreshSelfHealingSecurityIssues(application.id);
+          } else {
+            navigate(goalExecutionPath(existing));
+          }
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Failed to update goal');
+        } finally {
+          setAutoFixingIncident(null);
+        }
+        return;
+      }
+
+      const configuredWorkflowId = application.self_healing_workflow_id?.trim();
+      const workflow = resolveSelfHealingWorkflow(application, workflowTemplates);
+      if (!workflow) {
+        setError(
+          configuredWorkflowId
+            ? 'The configured self-healing workflow no longer exists.'
+            : 'Create the standard workflow or keep only one saved workflow.',
+        );
+        return;
+      }
+      if (!application.github_repo_url) {
+        setError('Link a GitHub repository to this application before starting auto-fix.');
+        return;
+      }
+      const steps = (workflow?.steps as WorkflowRole[] | undefined) ?? [];
+      const effective = effectiveGoalWorkflowRoles(
+        { ...(workflow?.workflow_roles ?? {}) },
+        application,
+        steps,
+      );
+      if (!effective.develop) {
+        setError('The standard workflow must supply a Development agent before auto-fix can run.');
+        return;
+      }
+      if (steps.includes('deploy') && !effective.deploy) {
+        setError('The standard workflow must supply a Deployment agent before auto-fix can run.');
+        return;
+      }
+
+      setAutoFixingIncident(key);
+      setError(null);
+      try {
+        const created = await createGoalFromWiz(application.id, incident.id, effective, {
+          workflow_id: workflow.id,
+        });
+        setGoals((prev) => [created, ...prev.filter((g) => g.id !== created.id)]);
+        navigate(goalExecutionPath(created));
+        await refreshSelfHealingSecurityIssues(application.id);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to start auto-fix');
+      } finally {
+        setAutoFixingIncident(null);
+      }
+      return;
+    }
+
     if (incident.kind === 'ci_cd' || incident.kind === 'sla_breach') {
       const goal = goals.find((g) => g.id === incident.id);
       if (!goal) {
@@ -2457,10 +2727,12 @@ export function ApplicationDetailPage() {
               incidents={selfHealingIncidents[currentApp.id] ?? []}
               ciIncidents={selfHealingCiIncidents[currentApp.id] ?? []}
               slaIncidents={selfHealingSlaIncidents[currentApp.id] ?? []}
+              securityIssues={selfHealingSecurityIssues[currentApp.id] ?? []}
               goals={goals}
               loadError={selfHealingLoadErrors[currentApp.id] ?? null}
               ciLoadError={selfHealingCiLoadErrors[currentApp.id] ?? null}
               slaLoadError={selfHealingSlaLoadErrors[currentApp.id] ?? null}
+              securityLoadError={selfHealingSecurityLoadErrors[currentApp.id] ?? null}
               integrations={integrations}
               workflowTemplates={workflowTemplates}
               saving={savingSelfHealingFor === currentApp.id}

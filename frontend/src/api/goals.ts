@@ -162,6 +162,20 @@ export function createGoalFromZendesk(
   });
 }
 
+export function createGoalFromWiz(
+  applicationId: string,
+  issueId: string,
+  workflowRoles: WorkflowRoles | undefined,
+  opts: { workflow_id: string },
+) {
+  return api.post<Goal>('/api/goals/from/wiz', {
+    application_id: applicationId,
+    issue_id: issueId,
+    workflow_roles: workflowRoles ?? {},
+    workflow_id: opts.workflow_id.trim(),
+  });
+}
+
 export function updateGoal(
   id: string,
   updates: { status?: GoalStatus; title?: string; description?: string },

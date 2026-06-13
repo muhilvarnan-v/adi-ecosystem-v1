@@ -12,6 +12,7 @@ from app.schemas.self_healing import (
     CircleCIWebhookResult,
     SLAWebhookResult,
     SelfHealingIncident,
+    WizIngestResult,
     ZendeskWebhookResult,
 )
 from app.services.circleci_goal import (
@@ -721,3 +722,153 @@ def handle_sla_webhook(
         goals=goals,
         received_at=datetime.now(timezone.utc),
     )
+
+
+def _normalize_wiz_issue(issue: dict[str, Any]) -> dict[str, Any] | None:
+    """Coerce a raw Wiz issue into the stable shape we persist on the application."""
+    if not isinstance(issue, dict):
+        return None
+    issue_id = str(issue.get("id") or issue.get("issue_id") or "").strip()
+    if not issue_id:
+        return None
+    return {
+        "id": issue_id,
+        "severity": str(issue.get("severity") or "").strip(),
+        "status": str(issue.get("status") or "").strip(),
+        "title": str(issue.get("title") or issue.get("name") or "").strip(),
+        "description": str(issue.get("description") or "").strip(),
+        "url": str(issue.get("url") or issue.get("link") or "").strip(),
+        "resource": str(issue.get("resource") or issue.get("entity") or "").strip(),
+        "control": str(issue.get("control") or issue.get("rule") or "").strip(),
+    }
+
+
+def _wiz_external_id(issue: dict[str, Any]) -> str:
+    return f"wiz:{issue.get('id')}"
+
+
+def _wiz_goal_title(issue: dict[str, Any]) -> str:
+    label = issue.get("control") or issue.get("title") or issue.get("id")
+    return f"Security issue: {label}"
+
+
+def _wiz_goal_description(issue: dict[str, Any]) -> str:
+    lines = [
+        "Wiz reported a security issue.",
+        "",
+        f"- Severity: {issue.get('severity') or 'UNKNOWN'}",
+        f"- Status: {issue.get('status') or 'OPEN'}",
+    ]
+    if issue.get("resource"):
+        lines.append(f"- Resource: {issue['resource']}")
+    if issue.get("control"):
+        lines.append(f"- Control: {issue['control']}")
+    if issue.get("url"):
+        lines.append(f"- Wiz issue: {issue['url']}")
+    if issue.get("description"):
+        lines.extend(["", str(issue["description"])])
+    return "\n".join(lines)
+
+
+def store_wiz_security_issues(
+    db, user_id: str, application_id: str, payload: dict[str, Any]
+) -> WizIngestResult:
+    """Persist a Wiz-shaped payload of security issues onto the application.
+
+    Storing never requires a linked GitHub repository or workflow — it just fills
+    the Security Issues tab. The auto-fix prerequisites are enforced later, when a
+    goal is created from an issue (see create_wiz_goal_from_issue_fields).
+    """
+    app = db.get_application(application_id, user_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    raw = payload.get("issues")
+    if not isinstance(raw, list):
+        raw = [payload]
+    normalized = [item for item in (_normalize_wiz_issue(i) for i in raw) if item]
+    db.update_application(application_id, user_id, {"security_issues": normalized})
+    return WizIngestResult(stored=len(normalized), received_at=datetime.now(timezone.utc))
+
+
+def list_application_security_issues(
+    db, user_id: str, application_id: str
+) -> list[SelfHealingIncident]:
+    app = db.get_application(application_id, user_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    issues = app.get("security_issues") or []
+    incidents: list[SelfHealingIncident] = []
+    for issue in issues:
+        normalized = _normalize_wiz_issue(issue) if isinstance(issue, dict) else None
+        if not normalized:
+            continue
+        external_id = _wiz_external_id(normalized)
+        linked_goal = db.find_goal_by_external_id(
+            user_id, application_id, GoalSource.WIZ.value, external_id
+        )
+        incidents.append(
+            SelfHealingIncident(
+                id=normalized["id"],
+                key=external_id,
+                title=normalized.get("title") or normalized.get("control") or "Security issue",
+                description=normalized.get("description") or "",
+                url=normalized.get("url") or None,
+                status=normalized.get("status") or None,
+                priority=(normalized.get("severity") or "").lower() or None,
+                goal_id=linked_goal.get("id") if linked_goal else None,
+                goal_status=_goal_status(linked_goal),
+                execution_status=_goal_execution_status(linked_goal),
+                pr_url=linked_goal.get("pr_url") if linked_goal else None,
+                kind="security",
+            )
+        )
+    return incidents
+
+
+def create_wiz_goal_from_issue_fields(
+    db,
+    *,
+    user_id: str,
+    application_id: str,
+    issue: dict[str, Any],
+    workflow_id: str,
+    workflow_roles: dict[str, str] | None = None,
+    dedupe: bool = True,
+) -> dict[str, Any] | None:
+    app = require_application_for_goal(db, application_id, user_id)
+    normalized = _normalize_wiz_issue(issue) or issue
+    external_id = _wiz_external_id(normalized)
+
+    if dedupe and external_id:
+        existing = db.find_goal_by_external_id(
+            user_id=user_id,
+            application_id=application_id,
+            source=GoalSource.WIZ.value,
+            external_id=external_id,
+        )
+        if existing:
+            return existing
+
+    roles = workflow_roles or {}
+    merged, steps, max_cycles, wf_id = build_goal_workflow_snapshot(
+        db, user_id, app, roles, workflow_id
+    )
+
+    row = db.create_goal(
+        user_id=user_id,
+        title=_wiz_goal_title(normalized),
+        description=_wiz_goal_description(normalized),
+        source=GoalSource.WIZ.value,
+        application_id=application_id,
+        external_id=external_id,
+        external_url=normalized.get("url") or None,
+        agent_record_id=merged.get("develop"),
+        workflow_roles=merged,
+        workflow_id=wf_id,
+        workflow_steps=steps,
+        workflow_max_cycles=max_cycles,
+        status=GoalStatus.IN_PROGRESS.value,
+        execution_status=GoalExecutionStatus.QUEUED.value,
+    )
+    schedule_goal_execution(row["id"], user_id)
+    return row

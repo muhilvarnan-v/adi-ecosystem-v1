@@ -18,3 +18,9 @@ export function listSelfHealingSlaBreaches(applicationId: string) {
     `/api/applications/${applicationId}/self-healing/sla-breaches`,
   );
 }
+
+export function listSelfHealingSecurityIssues(applicationId: string) {
+  return api.get<SelfHealingIncident[]>(
+    `/api/applications/${applicationId}/self-healing/security-issues`,
+  );
+}
