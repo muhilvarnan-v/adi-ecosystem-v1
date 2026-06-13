@@ -45,6 +45,7 @@ class FirestoreService:
         workflow_max_cycles: int = 3,
         self_healing_enabled: bool = False,
         self_healing_workflow_id: str | None = None,
+        cloud_infrastructure: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         now = _utc_now()
         data = {
@@ -56,6 +57,7 @@ class FirestoreService:
             "workflow_max_cycles": workflow_max_cycles,
             "self_healing_enabled": self_healing_enabled,
             "self_healing_workflow_id": self_healing_workflow_id,
+            "cloud_infrastructure": cloud_infrastructure or [],
             "created_at": now,
             "updated_at": now,
         }
@@ -415,6 +417,19 @@ class FirestoreService:
             results.append(row)
         return results
 
+    def list_sla_integrations_by_webhook_token(self, webhook_token: str) -> list[dict[str, Any]]:
+        query = (
+            self._db.collection(INTEGRATIONS_COLLECTION)
+            .where(filter=firestore.FieldFilter("provider", "==", "sla"))
+            .where(filter=firestore.FieldFilter("tokens.webhook_token", "==", webhook_token))
+        )
+        results = []
+        for doc in query.stream():
+            row = doc.to_dict()
+            row["id"] = doc.id
+            results.append(row)
+        return results
+
     # --- Skills (GCP Skill Registry metadata) ---
 
     def create_skill(
@@ -432,6 +447,7 @@ class FirestoreService:
         include_patterns: list[str] | None = None,
         skill_md: str | None = None,
         additional_files: list[dict[str, str]] | None = None,
+        keyword_trigger: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now()
         data = {
@@ -448,6 +464,7 @@ class FirestoreService:
             "include_patterns": include_patterns,
             "skill_md": skill_md,
             "additional_files": additional_files or [],
+            "keyword_trigger": keyword_trigger,
             "created_at": now,
             "updated_at": now,
         }
@@ -839,18 +856,28 @@ class FirestoreService:
         self,
         user_id: str,
         name: str,
+        transport: str,
         url: str,
-        header_key: str,
-        header_value: str,
+        headers: dict[str, str],
+        auth: str,
+        command: str,
+        args: list[str],
+        env: dict[str, str],
+        manual_config: dict[str, Any] | None,
         description: str,
     ) -> dict[str, Any]:
         now = _utc_now()
         data = {
             "user_id": user_id,
             "name": name,
+            "transport": transport,
             "url": url,
-            "header_key": header_key,
-            "header_value": header_value,
+            "headers": headers,
+            "auth": auth,
+            "command": command,
+            "args": args,
+            "env": env,
+            "manual_config": manual_config,
             "description": description,
             "created_at": now,
             "updated_at": now,

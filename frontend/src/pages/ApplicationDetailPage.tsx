@@ -29,10 +29,15 @@ import {
   listTrelloCards,
   listZendeskTickets,
 } from '../api/integrations';
-import { listSelfHealingCiFailures, listSelfHealingIncidents } from '../api/selfHealing';
+import {
+  listSelfHealingCiFailures,
+  listSelfHealingIncidents,
+  listSelfHealingSlaBreaches,
+} from '../api/selfHealing';
 import { ExternalLinkIcon, GitHubIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type {
   Application,
+  CloudInfrastructureItem,
   WorkflowDefinition,
   WorkflowRoles,
   ExternalCard,
@@ -48,7 +53,6 @@ import type {
 import { listWorkflows } from '../api/workflows';
 import {
   APPLICATION_UNASSIGNED_SLUG,
-  GitHubRepoField,
   goalExecutionPath,
   LoadingIndicator,
   repoUrlFor,
@@ -60,8 +64,8 @@ const KANBAN_LANES: { id: GoalStatus; label: string }[] = [
   { id: 'done', label: 'Done' },
 ];
 
-type ApplicationViewTab = 'dashboard' | 'self_healing';
-type SelfHealingViewTab = 'incidents' | 'ci_cd';
+type ApplicationViewTab = 'delivery_goals' | 'self_healing' | 'infrastructure';
+type SelfHealingViewTab = 'incidents' | 'ci_cd' | 'sla_breach';
 
 const STANDARD_WORKFLOW_NAME = 'Standard workflow';
 
@@ -161,6 +165,209 @@ function ApplicationRepoBar({
   );
 }
 
+type CloudInfrastructureDraftItem = CloudInfrastructureItem & { draft_id: string };
+
+function createCloudInfrastructureDraft(item?: Partial<CloudInfrastructureItem>): CloudInfrastructureDraftItem {
+  return {
+    draft_id: `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
+    env_type: item?.env_type ?? 'dev',
+    provider_type: item?.provider_type ?? 'aws',
+    cloud_infra_id: item?.cloud_infra_id ?? '',
+  };
+}
+
+function toCloudInfrastructureDraftItems(items: CloudInfrastructureItem[] | null | undefined): CloudInfrastructureDraftItem[] {
+  const rows = (items ?? []).map((item) => createCloudInfrastructureDraft(item));
+  return rows.length > 0 ? rows : [createCloudInfrastructureDraft()];
+}
+
+function InfrastructureSection({
+  app,
+  githubConnected,
+  githubRepos,
+  reposLoadError,
+  saving,
+  savingCloudInfrastructure,
+  onRepoChange,
+  onSaveCloudInfrastructure,
+}: {
+  app: Application;
+  githubConnected: boolean;
+  githubRepos: GitHubRepo[];
+  reposLoadError: string | null;
+  saving: boolean;
+  savingCloudInfrastructure: boolean;
+  onRepoChange: (url: string) => void;
+  onSaveCloudInfrastructure: (items: CloudInfrastructureItem[]) => Promise<void>;
+}) {
+  const [cloudInfrastructureDraft, setCloudInfrastructureDraft] = useState<CloudInfrastructureDraftItem[]>(() =>
+    toCloudInfrastructureDraftItems(app.cloud_infrastructure),
+  );
+  const [cloudInfrastructureError, setCloudInfrastructureError] = useState<string | null>(null);
+
+  function updateCloudInfraDraft(draftId: string, updates: Partial<CloudInfrastructureItem>) {
+    setCloudInfrastructureDraft((prev) =>
+      prev.map((row) => (row.draft_id === draftId ? { ...row, ...updates } : row)),
+    );
+  }
+
+  function addCloudInfraDraft() {
+    setCloudInfrastructureDraft((prev) => [...prev, createCloudInfrastructureDraft()]);
+  }
+
+  function removeCloudInfraDraft(draftId: string) {
+    setCloudInfrastructureDraft((prev) => {
+      const next = prev.filter((row) => row.draft_id !== draftId);
+      return next.length > 0 ? next : [createCloudInfrastructureDraft()];
+    });
+  }
+
+  async function handleSaveCloudInfrastructure() {
+    setCloudInfrastructureError(null);
+    const payload = cloudInfrastructureDraft
+      .map((row) => ({
+        env_type: row.env_type,
+        provider_type: row.provider_type,
+        cloud_infra_id: row.cloud_infra_id.trim(),
+      }))
+      .filter((row) => row.cloud_infra_id.length > 0);
+
+    try {
+      await onSaveCloudInfrastructure(payload);
+    } catch (e) {
+      setCloudInfrastructureError(
+        e instanceof Error ? e.message : 'Failed to save cloud infrastructure',
+      );
+    }
+  }
+
+  const configuredCloudInfrastructureCount = (app.cloud_infrastructure ?? []).length;
+
+  return (
+    <div className="infrastructure-section">
+      <section className="card infrastructure-hero">
+        <div className="card-header card-header-actions infrastructure-hero-header">
+          <div className="card-header-title">
+            <h2>Code Repo</h2>
+            <span className="card-count">Single repo</span>
+          </div>
+        </div>
+        <p className="muted infrastructure-hero-copy">
+          Manage repository wiring now, with future direction toward multi-cloud infrastructure across environments.
+        </p>
+        {reposLoadError && <div className="alert alert-error">{reposLoadError}</div>}
+        <ApplicationRepoBar
+          app={app}
+          githubConnected={githubConnected}
+          githubRepos={githubRepos}
+          saving={saving}
+          onRepoChange={onRepoChange}
+        />
+      </section>
+
+      <section className="card infrastructure-cloud-card" aria-label="Cloud infrastructure">
+        <div className="card-header card-header-actions infrastructure-cloud-header">
+          <div className="card-header-title">
+            <h3>Cloud Infrastructure</h3>
+            <span className="card-count">{configuredCloudInfrastructureCount} configured</span>
+          </div>
+        </div>
+        <p className="muted small infrastructure-cloud-copy">
+          Future: multi-cloud routing with explicit environment targets.
+        </p>
+        {cloudInfrastructureError && <div className="alert alert-error">{cloudInfrastructureError}</div>}
+
+        <div className="infrastructure-cloud-list">
+          {cloudInfrastructureDraft.map((item) => (
+            <div key={item.draft_id} className="infrastructure-cloud-row">
+              <label>
+                ENV type
+                <select
+                  value={item.env_type}
+                  disabled={savingCloudInfrastructure}
+                  onChange={(e) =>
+                    updateCloudInfraDraft(item.draft_id, {
+                      env_type: e.target.value as CloudInfrastructureItem['env_type'],
+                    })
+                  }
+                >
+                  <option value="dev">dev</option>
+                  <option value="uat">uat</option>
+                  <option value="prod">prod</option>
+                </select>
+              </label>
+
+              <label>
+                Provider type
+                <select
+                  value={item.provider_type}
+                  disabled={savingCloudInfrastructure}
+                  onChange={(e) =>
+                    updateCloudInfraDraft(item.draft_id, {
+                      provider_type: e.target.value as CloudInfrastructureItem['provider_type'],
+                    })
+                  }
+                >
+                  <option value="aws">aws</option>
+                  <option value="gcp">gcp</option>
+                  <option value="azure">azure</option>
+                </select>
+              </label>
+
+              <label>
+                Cloud infra ID
+                <input
+                  type="text"
+                  placeholder="infra-001"
+                  value={item.cloud_infra_id}
+                  disabled={savingCloudInfrastructure}
+                  onChange={(e) =>
+                    updateCloudInfraDraft(item.draft_id, {
+                      cloud_infra_id: e.target.value,
+                    })
+                  }
+                />
+              </label>
+
+              <button
+                type="button"
+                className="btn btn-danger btn-sm infrastructure-cloud-remove"
+                disabled={savingCloudInfrastructure}
+                onClick={() => removeCloudInfraDraft(item.draft_id)}
+              >
+                <TrashIcon />
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="infrastructure-cloud-actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={savingCloudInfrastructure}
+            onClick={addCloudInfraDraft}
+          >
+            <PlusIcon />
+            Add cloud infra
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={savingCloudInfrastructure}
+            onClick={() => {
+              void handleSaveCloudInfrastructure();
+            }}
+          >
+            Save cloud infra
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function GoalCard({
   goal,
   onDelete,
@@ -181,6 +388,7 @@ function GoalCard({
     if (source === 'trello') return 'Trello';
     if (source === 'zendesk') return 'Zendesk';
     if (source === 'circleci') return 'CircleCI';
+    if (source === 'sla') return 'SLA';
     return 'Manual';
   }
 
@@ -382,9 +590,11 @@ function SelfHealingSection({
   application,
   incidents,
   ciIncidents,
+  slaIncidents,
   goals,
   loadError,
   ciLoadError,
+  slaLoadError,
   integrations,
   workflowTemplates,
   saving,
@@ -395,9 +605,11 @@ function SelfHealingSection({
   application: Application;
   incidents: SelfHealingIncident[];
   ciIncidents: SelfHealingIncident[];
+  slaIncidents: SelfHealingIncident[];
   goals: Goal[];
   loadError: string | null;
   ciLoadError: string | null;
+  slaLoadError: string | null;
   integrations: IntegrationStatus[];
   workflowTemplates: WorkflowDefinition[];
   saving: boolean;
@@ -412,6 +624,7 @@ function SelfHealingSection({
 }) {
   const zendeskConnected = integrations.find((i) => i.provider === 'zendesk')?.connected;
   const circleciConnected = integrations.find((i) => i.provider === 'circleci')?.connected;
+  const slaConnected = integrations.find((i) => i.provider === 'sla')?.connected;
   const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
   const selectedWorkflow = resolveSelfHealingWorkflow(application, workflowTemplates);
   const pipelineSteps = (selectedWorkflow?.steps as WorkflowRole[] | undefined) ?? [];
@@ -440,10 +653,19 @@ function SelfHealingSection({
     unknownWorkflow ||
     missingDevelop ||
     missingDeploy;
+  const slaFixDisabled =
+    !slaConnected ||
+    !githubConnected ||
+    !application.github_repo_url ||
+    missingWorkflow ||
+    unknownWorkflow ||
+    missingDevelop ||
+    missingDeploy;
   const [activeViewTab, setActiveViewTab] = useState<SelfHealingViewTab>('incidents');
   const viewTabs: { id: SelfHealingViewTab; label: string; count: number }[] = [
     { id: 'incidents', label: 'Incidents', count: incidents.length },
     { id: 'ci_cd', label: 'CI/CD failures', count: ciIncidents.length },
+    { id: 'sla_breach', label: 'SLA Breach', count: slaIncidents.length },
   ];
   const supportFixUnavailableReason =
     !zendeskConnected
@@ -478,8 +700,24 @@ function SelfHealingSection({
                 ? 'The workflow must include a Deployment agent.'
                 : undefined;
 
+  const slaFixUnavailableReason = !slaConnected
+    ? 'Connect SLA/SLO in Integrations and add the webhook URL to your Cloud Run SLO alert.'
+    : !githubConnected
+      ? 'Connect GitHub before auto-fix can open PRs.'
+      : !application.github_repo_url
+        ? 'Link a GitHub repository that matches your breached service.'
+        : unknownWorkflow
+          ? 'The configured self-healing workflow no longer exists.'
+          : missingWorkflow
+            ? 'Create the standard workflow or keep only one saved workflow.'
+            : missingDevelop
+              ? 'The workflow must include a Development agent.'
+              : missingDeploy
+                ? 'The workflow must include a Deployment agent.'
+                : undefined;
+
   function incidentGoal(incident: SelfHealingIncident): Goal | undefined {
-    if (incident.kind === 'ci_cd') {
+    if (incident.kind === 'ci_cd' || incident.kind === 'sla_breach') {
       return goals.find((g) => g.id === incident.id);
     }
     if (incident.goal_id) {
@@ -500,15 +738,16 @@ function SelfHealingSection({
   }
 
   return (
-    <section className="self-healing-section" aria-label={`Self-healing for ${application.title}`}>
+    <section className="self-healing-section" aria-label="Self-healing section">
       {activeViewTab === 'incidents' && loadError && <p className="alert alert-error">{loadError}</p>}
       {activeViewTab === 'ci_cd' && ciLoadError && <p className="alert alert-error">{ciLoadError}</p>}
+      {activeViewTab === 'sla_breach' && slaLoadError && <p className="alert alert-error">{slaLoadError}</p>}
 
       <div className="self-healing-simple-header">
         <p className="muted small">
           {application.self_healing_enabled
-            ? 'When Auto fix is on, matching Zendesk tickets and failed CircleCI runs for this repo start the standard workflow automatically.'
-            : 'Zendesk incidents appear here from support; CircleCI failures appear under CI/CD when webhooks fire. Use Fix to start the workflow manually.'}
+            ? 'When Auto fix is on, matching Zendesk tickets, failed CircleCI runs, and SLA/SLO breach webhooks start the standard workflow automatically.'
+            : 'Zendesk incidents appear here from support; CircleCI and SLA/SLO failures appear in their tabs when webhooks fire. Use Fix/Open run to handle them manually.'}
         </p>
         <button
           type="button"
@@ -713,6 +952,105 @@ function SelfHealingSection({
                               className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
                               disabled={ciFixDisabled || isFixing}
                               title={ciFixDisabled ? ciFixUnavailableReason : undefined}
+                              onClick={() => onAutoFix(application, incident)}
+                            >
+                              {isFixing
+                                ? 'Working…'
+                                : fixState === 'failed'
+                                  ? goal?.resumable
+                                    ? 'Retry fix'
+                                    : 'Open run'
+                                  : 'Open run'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeViewTab === 'sla_breach' && (
+            <div className="self-healing-incidents" role="tabpanel">
+              {!slaConnected ? (
+                <p className="muted small self-healing-empty">
+                  Connect SLA/SLO in Integrations, then configure the webhook URL in your Google Cloud Run SLO
+                  alerting policy. Breach events that match this application will create goals here when Auto fix is
+                  enabled.
+                </p>
+              ) : slaIncidents.length === 0 ? (
+                <p className="muted small self-healing-empty">
+                  No SLA breach events recorded yet. Send a test webhook from Cloud Monitoring / Cloud Run SLO
+                  alerting and include service/repository metadata that matches this application.
+                </p>
+              ) : (
+                <div className="import-list self-healing-incident-list">
+                  {slaIncidents.map((incident) => {
+                    const goal = incidentGoal(incident);
+                    const isFixing = autoFixingIncidentId === fixingKey(incident);
+                    const execStatus = goal?.execution_status ?? incident.execution_status;
+                    const prUrl = goal?.pr_url ?? incident.pr_url;
+                    const isRunning = execStatus === 'queued' || execStatus === 'running';
+                    const isCompleted = execStatus === 'completed';
+                    const isFailed = execStatus === 'failed';
+
+                    let fixState: 'running' | 'fixed' | 'created' | 'failed' | 'idle';
+                    if (isRunning) fixState = 'running';
+                    else if (isCompleted && prUrl) fixState = 'fixed';
+                    else if (isCompleted) fixState = 'created';
+                    else if (isFailed) fixState = 'failed';
+                    else fixState = 'idle';
+
+                    return (
+                      <div key={incident.id} className="import-item self-healing-incident">
+                        <div className="import-item-content">
+                          <div className="self-healing-incident-title">
+                            {incident.key && <strong className="self-healing-ci-key">{incident.key}</strong>}
+                            <span>{incident.title}</span>
+                          </div>
+                          {incident.url && (
+                            <a
+                              href={incident.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="muted small self-healing-ci-circle-link"
+                            >
+                              Open breach event
+                            </a>
+                          )}
+                        </div>
+                        <div className="self-healing-incident-actions">
+                          {prUrl && (
+                            <a
+                              href={prUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-ghost btn-sm self-healing-pr-link"
+                            >
+                              <ExternalLinkIcon />
+                              View PR
+                            </a>
+                          )}
+                          {fixState === 'running' && (
+                            <span className="status-pill status-pill-running">
+                              <span className="status-dot" />
+                              Fixing…
+                            </span>
+                          )}
+                          {fixState === 'fixed' && (
+                            <span className="status-pill status-pill-fixed">Merged / PR ready</span>
+                          )}
+                          {fixState === 'created' && (
+                            <span className="status-pill status-pill-created">Run finished</span>
+                          )}
+                          {(fixState === 'idle' || fixState === 'failed') && (
+                            <button
+                              type="button"
+                              className={fixState === 'failed' ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'}
+                              disabled={slaFixDisabled || isFixing}
+                              title={slaFixDisabled ? slaFixUnavailableReason : undefined}
                               onClick={() => onAutoFix(application, incident)}
                             >
                               {isFixing
@@ -1400,19 +1738,21 @@ export function ApplicationDetailPage() {
   const [selfHealingLoadErrors, setSelfHealingLoadErrors] = useState<Record<string, string | null>>({});
   const [selfHealingCiIncidents, setSelfHealingCiIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
   const [selfHealingCiLoadErrors, setSelfHealingCiLoadErrors] = useState<Record<string, string | null>>({});
+  const [selfHealingSlaIncidents, setSelfHealingSlaIncidents] = useState<Record<string, SelfHealingIncident[]>>({});
+  const [selfHealingSlaLoadErrors, setSelfHealingSlaLoadErrors] = useState<Record<string, string | null>>({});
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savingRepoFor, setSavingRepoFor] = useState<string | null>(null);
   const [savingSelfHealingFor, setSavingSelfHealingFor] = useState<string | null>(null);
+  const [savingCloudInfrastructureFor, setSavingCloudInfrastructureFor] = useState<string | null>(null);
   const [autoFixingIncident, setAutoFixingIncident] = useState<string | null>(null);
-  const [activeViewTab, setActiveViewTab] = useState<ApplicationViewTab>('dashboard');
+  const [activeViewTab, setActiveViewTab] = useState<ApplicationViewTab>('delivery_goals');
   const [showAppModal, setShowAppModal] = useState(false);
   const [editingApplicationId, setEditingApplicationId] = useState<string | null>(null);
   const [appTitle, setAppTitle] = useState('');
   const [appDescription, setAppDescription] = useState('');
-  const [appRepoUrl, setAppRepoUrl] = useState('');
   const [appSelfHealingWorkflowId, setAppSelfHealingWorkflowId] = useState('');
 
   const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
@@ -1452,7 +1792,7 @@ export function ApplicationDetailPage() {
   }, [load]);
 
   useEffect(() => {
-    setActiveViewTab('dashboard');
+    setActiveViewTab('delivery_goals');
   }, [applicationId]);
 
   useEffect(() => {
@@ -1558,6 +1898,42 @@ export function ApplicationDetailPage() {
   }, [applicationId, activeViewTab, integrations, selfHealingCiIncidents]);
 
   useEffect(() => {
+    const currentAppId =
+      applicationId && applicationId !== APPLICATION_UNASSIGNED_SLUG ? applicationId : null;
+    const slaConnected = integrations.find((i) => i.provider === 'sla')?.connected;
+    if (!currentAppId || activeViewTab !== 'self_healing') return;
+    const appId = currentAppId;
+    if (!slaConnected) {
+      setSelfHealingSlaIncidents((prev) => ({ ...prev, [appId]: [] }));
+      setSelfHealingSlaLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(selfHealingSlaIncidents, appId)) return;
+
+    let cancelled = false;
+    async function loadSelfHealingSlaForCurrentApp() {
+      try {
+        const rows = await listSelfHealingSlaBreaches(appId);
+        if (cancelled) return;
+        setSelfHealingSlaIncidents((prev) => ({ ...prev, [appId]: rows }));
+        setSelfHealingSlaLoadErrors((prev) => ({ ...prev, [appId]: null }));
+      } catch (e) {
+        if (cancelled) return;
+        setSelfHealingSlaIncidents((prev) => ({ ...prev, [appId]: [] }));
+        setSelfHealingSlaLoadErrors((prev) => ({
+          ...prev,
+          [appId]: e instanceof Error ? e.message : 'Failed to load SLA breaches',
+        }));
+      }
+    }
+
+    void loadSelfHealingSlaForCurrentApp();
+    return () => {
+      cancelled = true;
+    };
+  }, [applicationId, activeViewTab, integrations, selfHealingSlaIncidents]);
+
+  useEffect(() => {
     if (!showAppModal) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') closeAppModal();
@@ -1571,7 +1947,6 @@ export function ApplicationDetailPage() {
     setEditingApplicationId(null);
     setAppTitle('');
     setAppDescription('');
-    setAppRepoUrl('');
     setAppSelfHealingWorkflowId('');
   }
 
@@ -1579,7 +1954,6 @@ export function ApplicationDetailPage() {
     setEditingApplicationId(app.id);
     setAppTitle(app.title);
     setAppDescription(app.description ?? '');
-    setAppRepoUrl(app.github_repo_url ?? '');
     setAppSelfHealingWorkflowId(app.self_healing_workflow_id ?? '');
     setShowAppModal(true);
   }
@@ -1596,6 +1970,25 @@ export function ApplicationDetailPage() {
       setError(e instanceof Error ? e.message : 'Failed to update repository');
     } finally {
       setSavingRepoFor(null);
+    }
+  }
+
+  async function handleCloudInfrastructureSave(
+    applicationId: string,
+    items: CloudInfrastructureItem[],
+  ) {
+    setSavingCloudInfrastructureFor(applicationId);
+    setError(null);
+    try {
+      const updated = await updateApplication(applicationId, {
+        cloud_infrastructure: items,
+      });
+      setApplications((prev) => prev.map((a) => (a.id === applicationId ? updated : a)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update cloud infrastructure');
+      throw e;
+    } finally {
+      setSavingCloudInfrastructureFor(null);
     }
   }
 
@@ -1627,6 +2020,20 @@ export function ApplicationDetailPage() {
     }
   }
 
+  async function refreshSelfHealingSlaIncidents(applicationId: string) {
+    setSelfHealingSlaLoadErrors((prev) => ({ ...prev, [applicationId]: null }));
+    try {
+      const rows = await listSelfHealingSlaBreaches(applicationId);
+      setSelfHealingSlaIncidents((prev) => ({ ...prev, [applicationId]: rows }));
+    } catch (e) {
+      setSelfHealingSlaIncidents((prev) => ({ ...prev, [applicationId]: [] }));
+      setSelfHealingSlaLoadErrors((prev) => ({
+        ...prev,
+        [applicationId]: e instanceof Error ? e.message : 'Failed to load SLA breaches',
+      }));
+    }
+  }
+
   async function handleSelfHealingSettingsChange(
     applicationId: string,
     updates: {
@@ -1646,20 +2053,22 @@ export function ApplicationDetailPage() {
   }
 
   async function handleSelfHealingAutoFix(application: Application, incident: SelfHealingIncident) {
-    if (incident.kind === 'ci_cd') {
+    if (incident.kind === 'ci_cd' || incident.kind === 'sla_breach') {
       const goal = goals.find((g) => g.id === incident.id);
       if (!goal) {
-        setError('Goal not found for this CI failure.');
+        setError('Goal not found for this incident.');
         return;
       }
-      const key = `${application.id}:${incident.id}:ci_cd`;
+      const kind = incident.kind === 'sla_breach' ? 'sla_breach' : 'ci_cd';
+      const key = `${application.id}:${incident.id}:${kind}`;
       setAutoFixingIncident(key);
       setError(null);
       try {
         if (goal.execution_status === 'failed' && goal.resumable) {
           const updated = await resumeGoal(incident.id);
           setGoals((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
-          await refreshSelfHealingCiIncidents(application.id);
+          if (incident.kind === 'sla_breach') await refreshSelfHealingSlaIncidents(application.id);
+          else await refreshSelfHealingCiIncidents(application.id);
         } else {
           navigate(goalExecutionPath(goal));
         }
@@ -1730,7 +2139,6 @@ export function ApplicationDetailPage() {
         const updated = await updateApplication(editingApplicationId, {
           title: appTitle.trim(),
           description: appDescription.trim(),
-          github_repo_url: appRepoUrl || null,
           self_healing_workflow_id: appSelfHealingWorkflowId || null,
         });
         setApplications((prev) => prev.map((a) => (a.id === editingApplicationId ? updated : a)));
@@ -1738,7 +2146,7 @@ export function ApplicationDetailPage() {
         const created = await createApplication(
           appTitle.trim(),
           appDescription.trim(),
-          appRepoUrl || null,
+          null,
           { self_healing_workflow_id: appSelfHealingWorkflowId || null },
         );
         setApplications((prev) => [created, ...prev]);
@@ -1765,13 +2173,14 @@ export function ApplicationDetailPage() {
     }
   }
 
-  function goalCountForApp(appId: string) {
-    return goals.filter((g) => g.application_id === appId).length;
-  }
-
   const unassignedGoals = goals.filter((g) => !g.application_id);
   const isUnassignedRoute = applicationId === APPLICATION_UNASSIGNED_SLUG;
   const currentApp = applicationId && !isUnassignedRoute ? applications.find((a) => a.id === applicationId) : undefined;
+  const currentAppGoals = currentApp ? goals.filter((g) => g.application_id === currentApp.id) : [];
+  const backlogGoalsCount = currentAppGoals.filter((g) => (g.status ?? 'backlog') === 'backlog').length;
+  const inProgressGoalsCount = currentAppGoals.filter((g) => (g.status ?? 'backlog') === 'in_progress').length;
+  const completedGoalsCount = currentAppGoals.filter((g) => (g.status ?? 'backlog') === 'done').length;
+  const activeRunsCount = currentAppGoals.filter((g) => g.execution_status === 'queued' || g.execution_status === 'running').length;
   const notFound =
     !loading &&
     !!applicationId &&
@@ -1819,13 +2228,6 @@ export function ApplicationDetailPage() {
               placeholder="What is this application about?"
             />
           </label>
-          <GitHubRepoField
-            repos={githubRepos}
-            githubConnected={!!githubConnected}
-            value={appRepoUrl}
-            onChange={setAppRepoUrl}
-            reposLoadError={reposLoadError}
-          />
           <fieldset className="fieldset app-self-healing-settings">
             <legend>Self-healing</legend>
             {workflowTemplates.length > 0 ? (
@@ -1865,6 +2267,16 @@ export function ApplicationDetailPage() {
     </div>
   );
 
+  function nextActionHint(app: Application) {
+    if (!app.github_repo_url) return 'Link a repository to unlock goal execution and automated fixes.';
+    if (!app.description?.trim()) return 'Add a short description so teammates can triage goals faster.';
+    if (!app.self_healing_enabled && !app.self_healing_workflow_id) {
+      return 'Choose a self-healing strategy to reduce manual recovery work.';
+    }
+    if (backlogGoalsCount > 0) return 'Move backlog items into progress to keep delivery momentum.';
+    return 'System is healthy. Keep an eye on incidents and CI failures.';
+  }
+
   return (
     <div className="page page-applications page-application-detail">
       <div className="page-header page-header-row">
@@ -1880,12 +2292,11 @@ export function ApplicationDetailPage() {
           <p className="muted">
             {isUnassignedRoute
               ? 'Goals without an application. Assign them by moving to an application when you recreate or import.'
-              : 'Goal board, imports, and self-healing incidents for this application.'}
+              : currentApp?.description?.trim() || 'Add a description so every goal and incident has clear context.'}
           </p>
         </div>
         {!isUnassignedRoute && currentApp && (
           <div className="application-section-actions">
-            <span className="card-count">{goalCountForApp(currentApp.id)} goals</span>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEditApplication(currentApp)}>
               Edit
             </button>
@@ -1902,7 +2313,6 @@ export function ApplicationDetailPage() {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
-      {reposLoadError && !error && <div className="alert alert-error">{reposLoadError}</div>}
       {appModal}
 
       {loading ? (
@@ -1940,6 +2350,7 @@ export function ApplicationDetailPage() {
               workflow_max_cycles: 3,
               self_healing_enabled: false,
               self_healing_workflow_id: null,
+              cloud_infrastructure: [],
               created_at: '',
               updated_at: '',
             }}
@@ -1963,34 +2374,43 @@ export function ApplicationDetailPage() {
           />
         </section>
       ) : currentApp ? (
-        <div className="applications-list">
-          <section className="card application-section">
-            <div className="application-section-header">
-              <div className="application-section-info">
-                {currentApp.description && (
-                  <p className="application-section-desc">{currentApp.description}</p>
-                )}
-                <ApplicationRepoBar
-                  app={currentApp}
-                  githubConnected={!!githubConnected}
-                  githubRepos={githubRepos}
-                  saving={savingRepoFor === currentApp.id}
-                  onRepoChange={(url) => handleRepoChange(currentApp.id, url)}
-                />
+        <section className="card application-section application-main-panel application-detail-shell">
+          <div className="application-context-rail" aria-label="Application context">
+            <div className="application-context-head">
+              <h2>Delivery health</h2>
+              <p className="application-section-desc">{nextActionHint(currentApp)}</p>
+            </div>
+
+            <div className="application-context-stats" aria-label="Application overview metrics">
+              <div className="application-context-stat">
+                <span>Backlog</span>
+                <strong>{backlogGoalsCount}</strong>
+              </div>
+              <div className="application-context-stat">
+                <span>In progress</span>
+                <strong>{inProgressGoalsCount}</strong>
+              </div>
+              <div className="application-context-stat">
+                <span>Completed</span>
+                <strong>{completedGoalsCount}</strong>
+              </div>
+              <div className="application-context-stat">
+                <span>Running now</span>
+                <strong>{activeRunsCount}</strong>
               </div>
             </div>
 
-            <div className="application-window-tabs" role="tablist" aria-label={`${currentApp.title} sections`}>
+            <div className="application-window-tabs application-context-bottom-tabs" role="tablist" aria-label="Application sections">
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeViewTab === 'dashboard'}
+                aria-selected={activeViewTab === 'delivery_goals'}
                 className={
-                  activeViewTab === 'dashboard' ? 'application-window-tab is-active' : 'application-window-tab'
+                  activeViewTab === 'delivery_goals' ? 'application-window-tab is-active' : 'application-window-tab'
                 }
-                onClick={() => setActiveViewTab('dashboard')}
+                onClick={() => setActiveViewTab('delivery_goals')}
               >
-                Dashboard
+                Board
               </button>
               <button
                 type="button"
@@ -2002,51 +2422,74 @@ export function ApplicationDetailPage() {
                 onClick={() => setActiveViewTab('self_healing')}
               >
                 <span>Self-healing</span>
-                <span className="card-count">
-                  {(selfHealingIncidents[currentApp.id] ?? []).length +
-                    (selfHealingCiIncidents[currentApp.id] ?? []).length}
-                </span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeViewTab === 'infrastructure'}
+                className={
+                  activeViewTab === 'infrastructure'
+                    ? 'application-window-tab is-active'
+                    : 'application-window-tab'
+                }
+                onClick={() => setActiveViewTab('infrastructure')}
+              >
+                Infrastructure
               </button>
             </div>
+          </div>
 
-            {activeViewTab === 'self_healing' ? (
-              <SelfHealingSection
-                application={currentApp}
-                incidents={selfHealingIncidents[currentApp.id] ?? []}
-                ciIncidents={selfHealingCiIncidents[currentApp.id] ?? []}
-                goals={goals}
-                loadError={selfHealingLoadErrors[currentApp.id] ?? null}
-                ciLoadError={selfHealingCiLoadErrors[currentApp.id] ?? null}
-                integrations={integrations}
-                workflowTemplates={workflowTemplates}
-                saving={savingSelfHealingFor === currentApp.id}
-                autoFixingIncidentId={
-                  autoFixingIncident?.startsWith(`${currentApp.id}:`)
-                    ? autoFixingIncident.slice(currentApp.id.length + 1)
-                    : null
-                }
-                onSettingsChange={(aid, updates) => {
-                  void handleSelfHealingSettingsChange(aid, updates);
-                }}
-                onAutoFix={(application, incident) => {
-                  void handleSelfHealingAutoFix(application, incident);
-                }}
-              />
-            ) : (
-              <ApplicationKanban
-                application={currentApp}
-                goals={goals}
-                onGoalsChange={setGoals}
-                onError={setError}
-                onGoalExecuting={openGoalExecution}
-                integrations={integrations}
-                githubRepoLinked={!!currentApp.github_repo_url}
-                workflowTemplates={workflowTemplates}
-                onRefreshWorkflowTemplates={refreshWorkflowTemplates}
-              />
-            )}
-          </section>
-        </div>
+          {activeViewTab === 'infrastructure' ? (
+            <InfrastructureSection
+              key={currentApp.id}
+              app={currentApp}
+              githubConnected={!!githubConnected}
+              githubRepos={githubRepos}
+              reposLoadError={reposLoadError}
+              saving={savingRepoFor === currentApp.id}
+              savingCloudInfrastructure={savingCloudInfrastructureFor === currentApp.id}
+              onRepoChange={(url) => handleRepoChange(currentApp.id, url)}
+              onSaveCloudInfrastructure={(items) => handleCloudInfrastructureSave(currentApp.id, items)}
+            />
+          ) : activeViewTab === 'self_healing' ? (
+            <SelfHealingSection
+              application={currentApp}
+              incidents={selfHealingIncidents[currentApp.id] ?? []}
+              ciIncidents={selfHealingCiIncidents[currentApp.id] ?? []}
+              slaIncidents={selfHealingSlaIncidents[currentApp.id] ?? []}
+              goals={goals}
+              loadError={selfHealingLoadErrors[currentApp.id] ?? null}
+              ciLoadError={selfHealingCiLoadErrors[currentApp.id] ?? null}
+              slaLoadError={selfHealingSlaLoadErrors[currentApp.id] ?? null}
+              integrations={integrations}
+              workflowTemplates={workflowTemplates}
+              saving={savingSelfHealingFor === currentApp.id}
+              autoFixingIncidentId={
+                autoFixingIncident?.startsWith(`${currentApp.id}:`)
+                  ? autoFixingIncident.slice(currentApp.id.length + 1)
+                  : null
+              }
+              onSettingsChange={(aid, updates) => {
+                void handleSelfHealingSettingsChange(aid, updates);
+              }}
+              onAutoFix={(application, incident) => {
+                void handleSelfHealingAutoFix(application, incident);
+              }}
+            />
+          ) : (
+            <ApplicationKanban
+              application={currentApp}
+              goals={goals}
+              onGoalsChange={setGoals}
+              onError={setError}
+              onGoalExecuting={openGoalExecution}
+              integrations={integrations}
+              githubRepoLinked={!!currentApp.github_repo_url}
+              workflowTemplates={workflowTemplates}
+              onRefreshWorkflowTemplates={refreshWorkflowTemplates}
+            />
+          )}
+        </section>
       ) : null}
     </div>
   );

@@ -26,6 +26,7 @@ class GoalSource(str, Enum):
     TRELLO = "trello"
     ZENDESK = "zendesk"
     CIRCLECI = "circleci"
+    SLA = "sla"
 
 
 class GoalStatus(str, Enum):

@@ -16,8 +16,8 @@ export function Layout() {
             <SparklesIcon />
           </div>
           <div className="brand-text">
-            <span className="brand-mark">AID</span>
-            <span className="brand-sub">Agent Platform</span>
+            <span className="brand-mark">AI/team™</span>
+            <span className="brand-sub">An AI Engineering Team for Every Application</span>
           </div>
         </div>
         <nav className="nav">

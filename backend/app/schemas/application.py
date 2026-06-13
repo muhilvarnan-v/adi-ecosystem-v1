@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -55,6 +56,39 @@ class WorkflowDefinition(BaseModel):
         return normalize_workflow_steps(v)
 
 
+CloudEnvType = Literal["dev", "uat", "prod"]
+CloudProviderType = Literal["aws", "gcp", "azure"]
+
+
+class CloudInfrastructureItem(BaseModel):
+    env_type: CloudEnvType = "dev"
+    provider_type: CloudProviderType = "aws"
+    cloud_infra_id: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("env_type", mode="before")
+    @classmethod
+    def normalize_env_type(cls, v: object) -> CloudEnvType:
+        s = str(v).strip().lower() if v is not None else "dev"
+        if s in {"dev", "uat", "prod"}:
+            return s
+        return "dev"
+
+    @field_validator("provider_type", mode="before")
+    @classmethod
+    def normalize_provider_type(cls, v: object) -> CloudProviderType:
+        s = str(v).strip().lower() if v is not None else "aws"
+        if s in {"aws", "gcp", "azure"}:
+            return s
+        return "aws"
+
+    @field_validator("cloud_infra_id", mode="before")
+    @classmethod
+    def normalize_cloud_infra_id(cls, v: object) -> str:
+        if v is None:
+            return ""
+        return str(v).strip()
+
+
 class ApplicationCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: str = Field(default="", max_length=10000)
@@ -63,6 +97,7 @@ class ApplicationCreate(BaseModel):
     workflow_max_cycles: int = Field(default=3, ge=1, le=10)
     self_healing_enabled: bool = False
     self_healing_workflow_id: str | None = Field(default=None, max_length=80)
+    cloud_infrastructure: list[CloudInfrastructureItem] = Field(default_factory=list)
 
     @field_validator("workflow_roles", mode="before")
     @classmethod
@@ -90,6 +125,7 @@ class ApplicationUpdate(BaseModel):
     workflow_max_cycles: int | None = Field(default=None, ge=1, le=10)
     self_healing_enabled: bool | None = None
     self_healing_workflow_id: str | None = Field(default=None, max_length=80)
+    cloud_infrastructure: list[CloudInfrastructureItem] | None = None
 
     @field_validator("workflow_roles", mode="before")
     @classmethod
@@ -119,5 +155,6 @@ class ApplicationResponse(BaseModel):
     workflow_max_cycles: int = 3
     self_healing_enabled: bool = False
     self_healing_workflow_id: str | None = None
+    cloud_infrastructure: list[CloudInfrastructureItem] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

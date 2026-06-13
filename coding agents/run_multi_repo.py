@@ -283,10 +283,9 @@ def auth_repo_url(repo_url: str, github_token: str | None) -> str:
 
 
 def feature_branch_for_repo(repo_url: str, goal_id: str | None = None) -> str:
-    slug = repo_url.replace("https://github.com/", "").replace("/", "-")
     if goal_id:
-        return f"openhands/{slug}-{goal_id[:8]}"[:120]
-    return f"openhands/{slug}"[:120]
+        return f"aid/{goal_id[:8]}-goal_id"[:120]
+    return "aid/no-goal-id"
 
 
 def _truncate(s: str, max_len: int) -> str:
@@ -1089,7 +1088,7 @@ def main() -> None:
 
     if args.dry_run:
         print("\nPrompt preview:\n")
-        print(build_goal_prompt(args.goal, args.base_branch, "openhands/owner-repo"))
+        print(build_goal_prompt(args.goal, args.base_branch, "aid/12345678-goal_id"))
         return
 
     api_key = require_api_key()

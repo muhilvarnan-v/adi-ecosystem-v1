@@ -38,15 +38,31 @@ class AgentConfigBuilder:
         ]
 
         for mcp in mcp_servers:
+            transport = str(mcp.get("transport") or "").strip().lower() or "http"
+            url = (mcp.get("url") or "").strip()
+            if transport not in {"http", "sse"} or not url:
+                continue
             tool: dict[str, Any] = {
                 "type": "mcp_server",
                 "name": mcp["name"],
-                "url": mcp["url"],
+                "url": url,
             }
-            header_key = (mcp.get("header_key") or "").strip()
-            header_value = (mcp.get("header_value") or "").strip()
-            if header_key and header_value:
-                tool["headers"] = {header_key: header_value}
+            headers = mcp.get("headers") or {}
+            if isinstance(headers, dict):
+                filtered = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in headers.items()
+                    if str(k).strip() and str(v).strip()
+                }
+            else:
+                filtered = {}
+            if not filtered:
+                header_key = (mcp.get("header_key") or "").strip()
+                header_value = (mcp.get("header_value") or "").strip()
+                if header_key and header_value:
+                    filtered = {header_key: header_value}
+            if filtered:
+                tool["headers"] = filtered
             tools.append(tool)
 
         if tools:

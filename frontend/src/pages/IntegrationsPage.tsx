@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   disconnectIntegration,
   connectCircleCI,
+  connectSLA,
   listIntegrations,
   startGitHubOAuth,
   startJiraOAuth,
@@ -28,6 +29,7 @@ const PROVIDER_ICONS: Record<IntegrationProvider, typeof JiraIcon> = {
   github: GitHubIcon,
   zendesk: ZendeskIcon,
   circleci: CircleCIIcon,
+  sla: CircleCIIcon,
 };
 
 export function IntegrationsPage() {
@@ -76,6 +78,12 @@ export function IntegrationsPage() {
         const res = await connectCircleCI();
         setMessage(
           `CircleCI connected. Add this outbound webhook URL in CircleCI (Project Settings → Webhooks): ${res.webhook_url}`,
+        );
+        await load();
+      } else if (provider === 'sla') {
+        const res = await connectSLA();
+        setMessage(
+          `SLA/SLO connected. Configure your Google Cloud Run SLO alert webhook URL: ${res.webhook_url}`,
         );
         await load();
       } else if (provider === 'zendesk') {
@@ -142,6 +150,13 @@ export function IntegrationsPage() {
         'Receive outbound webhooks when workflows or jobs fail, and open self-healing goals for matching applications.',
       authNote: 'Inbound webhook (token)',
     },
+    {
+      id: 'sla',
+      name: 'SLA / SLO Breach',
+      description:
+        'Receive Cloud Run SLO/SLA breach webhooks and open self-healing goals automatically for matching applications.',
+      authNote: 'Inbound webhook (token)',
+    },
   ];
 
   return (
@@ -150,7 +165,7 @@ export function IntegrationsPage() {
         <h1>Integrations</h1>
         <p className="muted">
           Connect Jira, Trello, and Zendesk to import goals, GitHub to link application repositories and import
-          skills, and CircleCI to trigger self-healing when pipelines fail.
+          skills, CircleCI to trigger self-healing when pipelines fail, and SLA/SLO webhooks for Cloud Run breach auto-fix.
         </p>
       </div>
 

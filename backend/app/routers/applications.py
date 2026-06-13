@@ -22,6 +22,7 @@ def _to_response(row: dict) -> ApplicationResponse:
         workflow_max_cycles=int(row.get("workflow_max_cycles") or 3),
         self_healing_enabled=bool(row.get("self_healing_enabled")),
         self_healing_workflow_id=row.get("self_healing_workflow_id"),
+        cloud_infrastructure=row.get("cloud_infrastructure") or [],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -60,6 +61,7 @@ def create_application(body: ApplicationCreate, user_id: str = Depends(get_user_
         workflow_max_cycles=body.workflow_max_cycles,
         self_healing_enabled=body.self_healing_enabled,
         self_healing_workflow_id=body.self_healing_workflow_id,
+        cloud_infrastructure=[row.model_dump() for row in body.cloud_infrastructure],
     )
     return _to_response(row)
 

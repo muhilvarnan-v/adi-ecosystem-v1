@@ -144,9 +144,14 @@ def resolve_workflow_roles(
             "mcp_servers": [
                 {
                     "name": m["name"],
-                    "url": m["url"],
-                    "header_key": m.get("header_key") or "",
-                    "header_value": m.get("header_value") or "",
+                    "transport": m.get("transport") or "http",
+                    "url": m.get("url") or "",
+                    "headers": m.get("headers") or {},
+                    "auth": m.get("auth") or "",
+                    "command": m.get("command") or "",
+                    "args": m.get("args") or [],
+                    "env": m.get("env") or {},
+                    "manual_config": m.get("manual_config"),
                 }
                 for m in mcp_servers
             ],

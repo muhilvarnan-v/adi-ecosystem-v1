@@ -43,6 +43,7 @@ def _to_response(row: dict) -> SkillResponse:
         github_branch=row.get("github_branch"),
         github_base_path=row.get("github_base_path"),
         include_patterns=row.get("include_patterns"),
+        keyword_trigger=row.get("keyword_trigger"),
         has_skill_md=bool((row.get("skill_md") or "").strip()),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -120,6 +121,7 @@ async def create_skill(body: SkillCreate, user_id: str = Depends(get_user_id)):
         state=result.get("state") if isinstance(result, dict) else "ACTIVE",
         skill_md=body.skill_md,
         additional_files=additional_files,
+        keyword_trigger=body.keyword_trigger,
     )
     return _to_response(row)
 

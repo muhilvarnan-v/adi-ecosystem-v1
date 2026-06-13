@@ -70,6 +70,64 @@ def normalize_agent_row(row: dict[str, Any]) -> dict[str, Any]:
 def build_mcp_config(mcp_servers: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not mcp_servers:
         return None
+
+    def _normalized_map(raw: Any) -> dict[str, str]:
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            key = str(k).strip()
+            value = str(v).strip()
+            if key and value:
+                out[key] = value
+        return out
+
+    def _normalized_args(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [str(v).strip() for v in raw if str(v).strip()]
+
+    def _entry_for_server(mcp: dict[str, Any]) -> dict[str, Any] | None:
+        transport = str(mcp.get("transport") or "").strip().lower()
+        if transport not in {"http", "sse", "stdio", "manual"}:
+            transport = "manual" if isinstance(mcp.get("manual_config"), dict) else "http"
+
+        if transport == "manual":
+            manual = mcp.get("manual_config")
+            return dict(manual) if isinstance(manual, dict) and manual else None
+
+        if transport in {"http", "sse"}:
+            url = str(mcp.get("url") or "").strip()
+            if not url:
+                return None
+            entry: dict[str, Any] = {"transport": transport, "url": url}
+
+            headers = _normalized_map(mcp.get("headers"))
+            if not headers:
+                hk = str(mcp.get("header_key") or "").strip()
+                hv = str(mcp.get("header_value") or "").strip()
+                if hk and hv:
+                    headers = {hk: hv}
+            if headers:
+                entry["headers"] = headers
+
+            auth = str(mcp.get("auth") or "").strip()
+            if auth:
+                entry["auth"] = auth
+            return entry
+
+        command = str(mcp.get("command") or "").strip()
+        if not command:
+            return None
+        entry = {"transport": "stdio", "command": command}
+        args = _normalized_args(mcp.get("args"))
+        if args:
+            entry["args"] = args
+        env = _normalized_map(mcp.get("env"))
+        if env:
+            entry["env"] = env
+        return entry
+
     servers: dict[str, Any] = {}
     used: set[str] = set()
     for mcp in mcp_servers:
@@ -81,12 +139,11 @@ def build_mcp_config(mcp_servers: list[dict[str, Any]]) -> dict[str, Any] | None
             name = f"{slug}-{n}"
             n += 1
         used.add(name)
-        entry: dict[str, Any] = {"url": str(mcp["url"]).strip(), "transport": "http"}
-        hk = (mcp.get("header_key") or "").strip()
-        hv = (mcp.get("header_value") or "").strip()
-        if hk and hv:
-            entry["headers"] = {hk: hv}
-        servers[name] = entry
+        entry = _entry_for_server(mcp)
+        if entry:
+            servers[name] = entry
+    if not servers:
+        return None
     return {"mcpServers": servers}
 
 

@@ -18,7 +18,7 @@ class SelfHealingIncident(BaseModel):
     goal_status: GoalStatus | None = None
     execution_status: GoalExecutionStatus | None = None
     pr_url: str | None = None
-    kind: Literal["support", "ci_cd"] = "support"
+    kind: Literal["support", "ci_cd", "sla_breach"] = "support"
 
 
 class ZendeskWebhookResult(BaseModel):
@@ -29,6 +29,15 @@ class ZendeskWebhookResult(BaseModel):
 
 
 class CircleCIWebhookResult(BaseModel):
+    matched_applications: int = 0
+    triggered_goals: int = 0
+    goals: list[dict[str, Any]] = Field(default_factory=list)
+    received_at: datetime
+    ignored: bool = False
+    ignore_reason: str | None = None
+
+
+class SLAWebhookResult(BaseModel):
     matched_applications: int = 0
     triggered_goals: int = 0
     goals: list[dict[str, Any]] = Field(default_factory=list)

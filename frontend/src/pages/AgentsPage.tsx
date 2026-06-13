@@ -9,7 +9,6 @@ import {
   listAgents,
   updateAgent,
 } from '../api/agents';
-import { listWorkspaces } from '../api/workspaces';
 import { listSkills } from '../api/skills';
 import { listLlmProfiles } from '../api/llmProfiles';
 import { listMcpServers } from '../api/mcpServers';
@@ -17,7 +16,6 @@ import { AgentIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type {
   Agent,
   CriticMode,
-  Environment,
   LlmProfile,
   McpServer,
   OpenHandsAgentSchema,
@@ -55,12 +53,22 @@ function displayInitials(name: string): string {
   return (name.trim().slice(0, 2) || '?').toUpperCase();
 }
 
+function mcpSummary(server: McpServer): string {
+  if (server.transport === 'stdio') {
+    const args = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
+    return `[STDIO] ${`${server.command}${args}`.trim()}`;
+  }
+  if (server.transport === 'manual') {
+    return '[MANUAL] custom JSON config';
+  }
+  return `[${server.transport.toUpperCase()}] ${server.url}`;
+}
+
 const emptyForm = () => ({
   displayName: '',
   description: '',
   systemPrompt: '',
   llmProfileId: '',
-  environmentId: '',
   tools: [...DEFAULT_TOOLS] as OpenHandsToolName[],
   condenserEnabled: true,
   condenserMaxSize: 240,
@@ -79,7 +87,6 @@ const emptyForm = () => ({
 export function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [llmProfiles, setLlmProfiles] = useState<LlmProfile[]>([]);
-  const [workspaces, setWorkspaces] = useState<Environment[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [schema, setSchema] = useState<OpenHandsAgentSchema | null>(null);
@@ -101,17 +108,15 @@ export function AgentsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [agentsData, llmData, envData, mcpData, skillsData, schemaData] = await Promise.all([
+      const [agentsData, llmData, mcpData, skillsData, schemaData] = await Promise.all([
         listAgents(),
         listLlmProfiles(),
-        listWorkspaces(),
         listMcpServers(),
         listSkills(),
         getOpenHandsSchema(),
       ]);
       setAgents(agentsData);
       setLlmProfiles(llmData);
-      setWorkspaces(envData);
       setMcpServers(mcpData);
       setSkills(skillsData);
       setSchema(schemaData);
@@ -169,7 +174,6 @@ export function AgentsPage() {
       description: agent.description,
       systemPrompt: agent.system_prompt,
       llmProfileId: agent.llm_profile_id || '',
-      environmentId: agent.environment_id || '',
       tools: (agent.tools.length ? agent.tools : [...DEFAULT_TOOLS]) as OpenHandsToolName[],
       condenserEnabled: agent.condenser_enabled,
       condenserMaxSize: agent.condenser_max_size,
@@ -226,12 +230,6 @@ export function AgentsPage() {
     }));
   }
 
-  function envLabel(envRecordId: string | null) {
-    if (!envRecordId) return null;
-    const env = workspaces.find((e) => e.id === envRecordId);
-    return env ? `${env.display_name} (${env.env_id})` : envRecordId;
-  }
-
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!form.displayName.trim() || !form.llmProfileId || form.tools.length === 0)
@@ -243,7 +241,7 @@ export function AgentsPage() {
         display_name: form.displayName.trim(),
         description: form.description.trim(),
         system_prompt: form.systemPrompt.trim(),
-        environment_id: form.environmentId.trim() || null,
+        environment_id: null,
         skill_attachments: form.attachedSkillIds.map((skill_id) => ({
           skill_id,
           target: DEFAULT_SKILL_TARGET,
@@ -342,12 +340,8 @@ export function AgentsPage() {
           ) : null}
 
           <section className="agents-detail-section">
-            <h3>Skills &amp; workspace</h3>
+            <h3>Skills</h3>
             <dl className="agents-detail-dl">
-              <div>
-                <dt>Sandbox (from workflow)</dt>
-                <dd>{envLabel(detailAgent.environment_id) ?? '—'}</dd>
-              </div>
               <div>
                 <dt>Harness skills</dt>
                 <dd>
@@ -391,7 +385,7 @@ export function AgentsPage() {
               <ul className="agents-detail-tags agents-detail-tags--mcp">
                 {detailAgent.mcp_server_ids.map((id) => {
                   const mcp = mcpServers.find((s) => s.id === id);
-                  return <li key={id}>{mcp ? `${mcp.name} (${mcp.url})` : id}</li>;
+                  return <li key={id}>{mcp ? `${mcp.name} (${mcpSummary(mcp)})` : id}</li>;
                 })}
               </ul>
             )}
@@ -582,36 +576,6 @@ export function AgentsPage() {
           </section>
 
           <section className="agents-form-section">
-            <h3>Default sandbox (optional)</h3>
-            <p className="field-hint muted small">
-              When set, this profile can default to a specific sandbox environment (otherwise the workflow chooses
-              the runtime).
-            </p>
-            <label>
-              Sandbox environment
-              <select
-                value={form.environmentId}
-                onChange={(e) => setForm((f) => ({ ...f, environmentId: e.target.value }))}
-              >
-                <option value="">None (use workflow sandbox)</option>
-                {workspaces.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.display_name} ({w.env_id})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.load_project_skills}
-                onChange={(e) => setForm((f) => ({ ...f, load_project_skills: e.target.checked }))}
-              />
-              Load project skills from the repository at runtime
-            </label>
-          </section>
-
-          <section className="agents-form-section">
             <h3>System prompt</h3>
             <p className="field-hint muted small">
               Replaces default CodeAct instructions when set (<code>Agent.system_prompt</code>).
@@ -630,10 +594,18 @@ export function AgentsPage() {
           <section className="agents-form-section">
             <h3>Skills</h3>
             <p className="field-hint muted small">
-              The <Link to="/workflows">workflow</Link> decides where the agent runs (sandbox). Checked skills are
-              copied into the repository for each run so the agent can follow them. Manage skills under{' '}
+              The <Link to="/workflows">workflow</Link> decides where the agent runs. Checked skills are copied
+              into the repository for each run so the agent can follow them. Manage skills under{' '}
               <Link to="/harness/skills">Harness → Skills</Link>.
             </p>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={form.load_project_skills}
+                onChange={(e) => setForm((f) => ({ ...f, load_project_skills: e.target.checked }))}
+              />
+              Load project skills from the repository at runtime
+            </label>
             {skills.length === 0 ? (
               <p className="muted small">
                 No skills yet. <Link to="/harness/skills">Add skills</Link> to attach them here.
@@ -700,7 +672,7 @@ export function AgentsPage() {
                       />
                       <span>
                         <strong>{server.name}</strong>
-                        <span className="muted small"> — {server.url}</span>
+                        <span className="muted small"> — {mcpSummary(server)}</span>
                       </span>
                     </label>
                   </li>
@@ -733,105 +705,6 @@ export function AgentsPage() {
                 disabled={!form.condenserEnabled}
               />
             </label>
-          </section>
-
-          <section className="agents-form-section">
-            <h3>Verification &amp; iterative refinement</h3>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.criticEnabled}
-                onChange={(e) => setForm((f) => ({ ...f, criticEnabled: e.target.checked }))}
-              />
-              Enable critic
-            </label>
-            {form.criticEnabled && (
-              <>
-                <label>
-                  Critic mode
-                  <select
-                    value={form.criticMode}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, criticMode: e.target.value as CriticMode }))
-                    }
-                  >
-                    <option value="finish_and_message">Finish and message</option>
-                    <option value="all_actions">All actions</option>
-                  </select>
-                </label>
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={form.enableIterativeRefinement}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, enableIterativeRefinement: e.target.checked }))
-                    }
-                  />
-                  Enable iterative refinement (retry until critic threshold)
-                </label>
-                {form.enableIterativeRefinement && (
-                  <>
-                    <label>
-                      Critic threshold
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={form.criticThreshold}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, criticThreshold: Number(e.target.value) }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      Max refinement iterations
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={form.maxRefinementIterations}
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            maxRefinementIterations: Number(e.target.value) || 3,
-                          }))
-                        }
-                      />
-                    </label>
-                  </>
-                )}
-              </>
-            )}
-          </section>
-
-          <section className="agents-form-section">
-            <h3>Security</h3>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={form.confirmationMode}
-                onChange={(e) => setForm((f) => ({ ...f, confirmationMode: e.target.checked }))}
-              />
-              Confirmation mode (approve risky actions)
-            </label>
-            {form.confirmationMode && (
-              <label>
-                Security analyzer
-                <select
-                  value={form.securityAnalyzer}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      securityAnalyzer: e.target.value as SecurityAnalyzerType,
-                    }))
-                  }
-                >
-                  <option value="llm">LLM security analyzer</option>
-                  <option value="none">None</option>
-                </select>
-              </label>
-            )}
           </section>
 
           <div className="modal-actions">

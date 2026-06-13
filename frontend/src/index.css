@@ -195,11 +195,15 @@ a:hover {
   flex: 1;
   min-width: 0;
   padding: 2.5rem 3rem 4rem;
-  max-width: 960px;
+  max-width: 1400px;
 }
 
 .main:has(.page-goals) {
   max-width: 1280px;
+}
+
+.main:has(.page-application-detail) {
+  max-width: min(1720px, 100%);
 }
 
 /* Goal run page: two-column workflow + chat needs more horizontal room */
@@ -309,6 +313,25 @@ a:hover {
   font-size: 0.95rem;
   max-width: 540px;
   line-height: 1.6;
+}
+
+.page-application-detail .page-header-row > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.page-application-detail .page-header .muted {
+  max-width: none;
+}
+
+.page-application-detail .page-header-row {
+  flex-wrap: nowrap;
+}
+
+.page-application-detail .application-section-actions {
+  align-self: flex-start;
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .page-header-row {
@@ -731,6 +754,108 @@ textarea {
   background: rgba(0, 61, 71, 0.04);
 }
 
+.applications-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.applications-hero {
+  padding: 1.25rem;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background:
+    radial-gradient(circle at 85% 15%, rgba(0, 121, 107, 0.15), transparent 52%),
+    linear-gradient(160deg, rgba(0, 61, 71, 0.08), rgba(255, 122, 77, 0.08));
+}
+
+.applications-hero-kicker {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.applications-hero h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.1vw, 1.75rem);
+  letter-spacing: -0.02em;
+}
+
+.applications-hero p {
+  margin: 0.4rem 0 0;
+  max-width: 44rem;
+}
+
+.applications-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 0.9rem;
+}
+
+.applications-grid-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  min-height: 188px;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 1));
+}
+
+.applications-grid-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.applications-grid-card-title {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.applications-grid-card-title:hover {
+  color: var(--primary);
+}
+
+.applications-grid-card-updated {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.applications-grid-card-desc {
+  margin: 0;
+  line-height: 1.45;
+  min-height: 2.7rem;
+}
+
+.applications-grid-card-repo {
+  margin: 0;
+  font-size: 0.8rem;
+  word-break: break-word;
+}
+
+.applications-grid-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: auto;
+}
+
+.applications-modal-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.applications-modal-loading p {
+  margin: 0;
+}
+
 .application-detail-inline-title {
   margin: 0 0 0.35rem;
   font-size: 1.05rem;
@@ -742,9 +867,184 @@ textarea {
   gap: 1.5rem;
 }
 
+.application-detail-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.application-context-rail {
+  position: static;
+  margin-bottom: 0;
+  padding: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.9rem;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(0, 121, 107, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 250, 0.96));
+}
+
+.application-context-head {
+  flex: 1 1 16rem;
+}
+
+.application-context-head h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+
+.application-context-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  flex: 2 1 26rem;
+}
+
+.application-context-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.application-context-stat span {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.application-context-stat strong {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.application-context-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.application-context-tab {
+  justify-content: space-between;
+  width: 100%;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.application-context-tab.is-active {
+  border-color: rgba(0, 61, 71, 0.22);
+}
+
+.application-context-checklist {
+  padding: 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.application-context-checklist h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.application-context-checklist ul {
+  margin: 0.55rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.application-context-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+}
+
+.application-context-checklist li::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.application-context-checklist li.is-ready {
+  color: #0b6a5f;
+  background: rgba(0, 121, 107, 0.12);
+}
+
+.application-context-checklist li.is-missing {
+  color: #b4511e;
+  background: rgba(255, 122, 77, 0.14);
+}
+
+.application-context-links {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.82rem;
+  flex: 0 0 auto;
+}
+
+.application-context-links a {
+  text-decoration: none;
+}
+
+.application-context-links a:hover {
+  text-decoration: underline;
+}
+
 .application-section {
   padding: 0;
   overflow: hidden;
+}
+
+.application-main-panel {
+  margin-bottom: 0;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 122, 77, 0.08), transparent 35%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 248, 246, 0.98));
+}
+
+.application-main-panel-badge {
+  align-self: flex-start;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.application-main-inline-tabs {
+  display: none;
+}
+
+.application-context-bottom-tabs {
+  flex: 1 1 100%;
+  padding-top: 0.25rem;
+}
+
+.application-context-bottom-tabs .application-window-tab {
+  flex: 1 1 0;
 }
 
 .application-section-header {
@@ -768,7 +1068,7 @@ textarea {
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.55;
-  max-width: 640px;
+  max-width: 860px;
   white-space: pre-wrap;
 }
 
@@ -869,6 +1169,103 @@ textarea {
   background: rgba(0, 61, 71, 0.08);
 }
 
+.infrastructure-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.infrastructure-hero {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.infrastructure-hero-copy {
+  margin: 0;
+  max-width: 48rem;
+}
+
+.infrastructure-cloud-card {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.infrastructure-cloud-copy {
+  margin: 0;
+}
+
+.infrastructure-cloud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.infrastructure-cloud-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 0.65rem;
+  align-items: end;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.infrastructure-cloud-row label {
+  margin: 0;
+}
+
+.infrastructure-cloud-remove {
+  align-self: end;
+}
+
+.infrastructure-cloud-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .infrastructure-cloud-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .infrastructure-cloud-remove {
+    justify-self: flex-start;
+  }
+}
+
+.infrastructure-roadmap {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.infrastructure-roadmap-card {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.infrastructure-roadmap-wide {
+  grid-column: 1 / -1;
+}
+
+.infrastructure-feature-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.infrastructure-feature-title svg {
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
 .github-repo-field {
   display: flex;
   flex-direction: column;
@@ -918,6 +1315,11 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(21, 19, 20, 0.04);
+}
+
+.page-application-detail .application-window-tabs {
+  width: 100%;
+  margin: 1rem 0 0;
 }
 
 .application-window-tab {
@@ -2777,6 +3179,16 @@ textarea {
   color: #2f6d3f;
 }
 
+.badge-circleci {
+  background: rgba(0, 95, 204, 0.12);
+  color: #005fcc;
+}
+
+.badge-sla {
+  background: rgba(198, 61, 47, 0.12);
+  color: #9b2b20;
+}
+
 .badge-manual {
   background: rgba(21, 19, 20, 0.06);
   color: var(--muted);
@@ -4178,12 +4590,43 @@ textarea {
     font-size: 1.6rem;
   }
 
+  .page-application-detail .page-header-row {
+    flex-wrap: wrap;
+  }
+
+  .page-application-detail .application-section-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .kanban-board {
     grid-template-columns: 1fr;
   }
 
+  .application-detail-shell {
+    gap: 0.9rem;
+  }
+
+  .application-context-rail {
+    position: static;
+    align-items: stretch;
+  }
+
+  .application-context-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .application-window-tabs {
     flex-wrap: wrap;
+  }
+
+  .applications-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .applications-grid-card-actions .btn {
+    flex: 1;
+    min-width: 7rem;
   }
 
   .self-healing-layout {

@@ -42,6 +42,7 @@ export function WorkflowEditorModal({
   onDelete,
 }: WorkflowEditorModalProps) {
   const [dragAgentId, setDragAgentId] = useState<string | null>(null);
+  const hasSandboxes = sandboxes.length > 0;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -50,6 +51,11 @@ export function WorkflowEditorModal({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    if (draft.sandbox_environment_id || sandboxes.length === 0) return;
+    onChange({ ...draft, sandbox_environment_id: sandboxes[0].id });
+  }, [draft, onChange, sandboxes]);
 
   const { includeReview, includeTest } = flagsFromSteps(draft.steps);
 
@@ -212,18 +218,25 @@ export function WorkflowEditorModal({
                 />
               </label>
               <label className="workflow-editor-sandbox">
-                Sandbox environment (optional)
-                <select
-                  value={draft.sandbox_environment_id ?? ''}
-                  onChange={(e) => patch({ sandbox_environment_id: e.target.value.trim() || null })}
-                >
-                  <option value="">— None —</option>
-                  {sandboxes.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.display_name} ({s.env_id})
-                    </option>
-                  ))}
-                </select>
+                Sandbox environment
+                {hasSandboxes ? (
+                  <select
+                    required
+                    value={draft.sandbox_environment_id ?? sandboxes[0].id}
+                    onChange={(e) => patch({ sandbox_environment_id: e.target.value.trim() || null })}
+                  >
+                    {sandboxes.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name} ({s.env_id})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="muted small">
+                    No sandbox environments found. Create one in <Link to="/harness/sandbox-envs">Harness → Sandbox
+                    envs</Link> to save this workflow.
+                  </p>
+                )}
               </label>
             </div>
             <p className="muted small workflow-editor-hint">
@@ -268,7 +281,12 @@ export function WorkflowEditorModal({
           <button type="button" className="btn btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" onClick={onConfirm}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void onConfirm()}
+            disabled={!hasSandboxes || !draft.sandbox_environment_id}
+          >
             {mode === 'create' ? 'Add workflow' : 'Done'}
           </button>
         </div>

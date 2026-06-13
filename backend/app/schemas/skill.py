@@ -17,8 +17,9 @@ class SkillFile(BaseModel):
 class SkillCreate(BaseModel):
     skill_id: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$")
     display_name: str = Field(..., min_length=1, max_length=200)
-    description: str = Field(..., max_length=2000)
+    description: str = Field(..., min_length=1, max_length=2000)
     skill_md: str = Field(..., min_length=1, max_length=500_000)
+    keyword_trigger: str = Field(default="", max_length=500)
     additional_files: list[SkillFile] = Field(default_factory=list)
 
 
@@ -39,6 +40,7 @@ class SkillUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     skill_md: str | None = Field(default=None, min_length=1, max_length=500_000)
+    keyword_trigger: str | None = Field(default=None, max_length=500)
     additional_files: list[SkillFile] | None = None
 
 
@@ -55,6 +57,7 @@ class SkillResponse(BaseModel):
     github_branch: str | None = None
     github_base_path: str | None = None
     include_patterns: list[str] | None = None
+    keyword_trigger: str | None = None
     has_skill_md: bool = False
     created_at: datetime
     updated_at: datetime

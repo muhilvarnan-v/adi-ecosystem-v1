@@ -2,6 +2,15 @@ export type WorkflowRole = 'develop' | 'review' | 'test' | 'deploy';
 
 export type WorkflowRoles = Partial<Record<WorkflowRole, string>>;
 
+export type CloudInfrastructureEnvType = 'dev' | 'uat' | 'prod';
+export type CloudInfrastructureProviderType = 'aws' | 'gcp' | 'azure';
+
+export interface CloudInfrastructureItem {
+  env_type: CloudInfrastructureEnvType;
+  provider_type: CloudInfrastructureProviderType;
+  cloud_infra_id: string;
+}
+
 export interface WorkflowDefinition {
   id: string;
   name: string;
@@ -22,11 +31,12 @@ export interface Application {
   workflow_max_cycles: number;
   self_healing_enabled: boolean;
   self_healing_workflow_id: string | null;
+  cloud_infrastructure: CloudInfrastructureItem[];
   created_at: string;
   updated_at: string;
 }
 
-export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk' | 'circleci';
+export type GoalSource = 'manual' | 'jira' | 'trello' | 'zendesk' | 'circleci' | 'sla';
 export type GoalStatus = 'backlog' | 'in_progress' | 'done';
 
 export type GoalExecutionStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -101,7 +111,7 @@ export interface GoalChatMessage {
   created_at: string;
 }
 
-export type IntegrationProvider = 'jira' | 'trello' | 'github' | 'zendesk' | 'circleci';
+export type IntegrationProvider = 'jira' | 'trello' | 'github' | 'zendesk' | 'circleci' | 'sla';
 
 export interface IntegrationStatus {
   provider: IntegrationProvider;
@@ -134,7 +144,7 @@ export interface ExternalCard {
   board_name: string | null;
 }
 
-export type SelfHealingIncidentKind = 'support' | 'ci_cd';
+export type SelfHealingIncidentKind = 'support' | 'ci_cd' | 'sla_breach';
 
 export interface SelfHealingIncident {
   id: string;
@@ -167,6 +177,7 @@ export interface Skill {
   github_branch: string | null;
   github_base_path: string | null;
   include_patterns: string[] | null;
+  keyword_trigger: string | null;
   has_skill_md: boolean;
   created_at: string;
   updated_at: string;
@@ -177,6 +188,7 @@ export interface SkillCreatePayload {
   display_name: string;
   description: string;
   skill_md: string;
+  keyword_trigger?: string;
   additional_files?: { path: string; content: string }[];
 }
 
@@ -392,9 +404,14 @@ export interface McpServer {
   id: string;
   user_id: string;
   name: string;
+  transport: 'http' | 'sse' | 'stdio' | 'manual';
   url: string;
-  header_key: string;
-  header_value: string;
+  headers: Record<string, string>;
+  auth: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  manual_config: Record<string, unknown> | null;
   description: string;
   created_at: string;
   updated_at: string;
@@ -402,8 +419,13 @@ export interface McpServer {
 
 export interface McpServerCreatePayload {
   name: string;
-  url: string;
-  header_key?: string;
-  header_value?: string;
+  transport: 'http' | 'sse' | 'stdio' | 'manual';
+  url?: string;
+  headers?: Record<string, string>;
+  auth?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  manual_config?: Record<string, unknown>;
   description?: string;
 }

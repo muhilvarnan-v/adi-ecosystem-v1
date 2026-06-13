@@ -4,6 +4,69 @@ import { createMcpServer, deleteMcpServer, listMcpServers, updateMcpServer } fro
 import { McpIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import type { McpServer } from '../types';
 
+type McpTransport = 'http' | 'sse' | 'stdio' | 'manual';
+
+function parseJsonObject(input: string, label: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(input || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${label} must be a JSON object`);
+    }
+    const out: Record<string, string> = {};
+    Object.entries(parsed as Record<string, unknown>).forEach(([k, v]) => {
+      const key = String(k).trim();
+      const value = String(v ?? '').trim();
+      if (key && value) out[key] = value;
+    });
+    return out;
+  } catch {
+    throw new Error(`${label} must be valid JSON object`);
+  }
+}
+
+function parseJsonStringArray(input: string, label: string): string[] {
+  try {
+    const parsed = JSON.parse(input || '[]');
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${label} must be a JSON array`);
+    }
+    return parsed.map((v) => String(v).trim()).filter(Boolean);
+  } catch {
+    throw new Error(`${label} must be valid JSON array`);
+  }
+}
+
+function parseManualConfig(input: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(input || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Manual config must be a JSON object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new Error('Manual config must be valid JSON object');
+  }
+}
+
+function toPrettyJson(value: unknown, fallback: string): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return fallback;
+  }
+}
+
+function mcpTarget(server: McpServer): string {
+  if (server.transport === 'stdio') {
+    const args = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
+    return `${server.command}${args}`.trim();
+  }
+  if (server.transport === 'manual') {
+    return 'Manual configuration';
+  }
+  return server.url;
+}
+
 function LoadingIndicator() {
   return (
     <div className="loading-dots" aria-label="Loading">
@@ -23,9 +86,14 @@ export function McpServersPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
+  const [transport, setTransport] = useState<McpTransport>('http');
   const [url, setUrl] = useState('');
-  const [headerKey, setHeaderKey] = useState('');
-  const [headerValue, setHeaderValue] = useState('');
+  const [headersJson, setHeadersJson] = useState('{}');
+  const [auth, setAuth] = useState('');
+  const [command, setCommand] = useState('');
+  const [argsJson, setArgsJson] = useState('[]');
+  const [envJson, setEnvJson] = useState('{}');
+  const [manualConfigJson, setManualConfigJson] = useState('{}');
   const [description, setDescription] = useState('');
 
   const load = useCallback(async () => {
@@ -55,9 +123,14 @@ export function McpServersPage() {
 
   function resetForm() {
     setName('');
+    setTransport('http');
     setUrl('');
-    setHeaderKey('');
-    setHeaderValue('');
+    setHeadersJson('{}');
+    setAuth('');
+    setCommand('');
+    setArgsJson('[]');
+    setEnvJson('{}');
+    setManualConfigJson('{}');
     setDescription('');
   }
 
@@ -70,36 +143,53 @@ export function McpServersPage() {
   function openEdit(server: McpServer) {
     setEditingId(server.id);
     setName(server.name);
+    setTransport(server.transport);
     setUrl(server.url);
-    setHeaderKey(server.header_key ?? '');
-    setHeaderValue(server.header_value ?? '');
+    setHeadersJson(toPrettyJson(server.headers ?? {}, '{}'));
+    setAuth(server.auth ?? '');
+    setCommand(server.command ?? '');
+    setArgsJson(toPrettyJson(server.args ?? [], '[]'));
+    setEnvJson(toPrettyJson(server.env ?? {}, '{}'));
+    setManualConfigJson(toPrettyJson(server.manual_config ?? {}, '{}'));
     setDescription(server.description ?? '');
     setShowCreateModal(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !url.trim()) return;
+    if (!name.trim()) return;
+
     setSubmitting(true);
     setError(null);
     try {
+      const trimmedUrl = url.trim();
+      const trimmedCommand = command.trim();
+
+      if ((transport === 'http' || transport === 'sse') && !trimmedUrl) {
+        throw new Error('Server URL is required for HTTP/SSE transport');
+      }
+      if (transport === 'stdio' && !trimmedCommand) {
+        throw new Error('Command is required for stdio transport');
+      }
+
+      const payload = {
+        name: name.trim(),
+        transport,
+        url: transport === 'http' || transport === 'sse' ? trimmedUrl : '',
+        headers: transport === 'http' || transport === 'sse' ? parseJsonObject(headersJson, 'Headers') : {},
+        auth: transport === 'http' || transport === 'sse' ? auth.trim() : '',
+        command: transport === 'stdio' ? trimmedCommand : '',
+        args: transport === 'stdio' ? parseJsonStringArray(argsJson, 'Args') : [],
+        env: transport === 'stdio' ? parseJsonObject(envJson, 'Environment') : {},
+        manual_config: transport === 'manual' ? parseManualConfig(manualConfigJson) : undefined,
+        description: description.trim(),
+      };
+
       if (editingId) {
-        const updated = await updateMcpServer(editingId, {
-          name: name.trim(),
-          url: url.trim(),
-          header_key: headerKey.trim(),
-          header_value: headerValue.trim(),
-          description: description.trim(),
-        });
+        const updated = await updateMcpServer(editingId, payload);
         setServers((items) => items.map((x) => (x.id === editingId ? updated : x)));
       } else {
-        await createMcpServer({
-          name: name.trim(),
-          url: url.trim(),
-          header_key: headerKey.trim(),
-          header_value: headerValue.trim(),
-          description: description.trim(),
-        });
+        await createMcpServer(payload);
         await load();
       }
       closeModal();
@@ -150,50 +240,127 @@ export function McpServersPage() {
             <span className="field-hint">Descriptive label for this MCP tool in agent configs</span>
           </label>
           <label>
-            Server URL
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-              type="url"
-              maxLength={2000}
-              placeholder="https://mcp.example.com/sse"
-            />
-            <span className="field-hint">Remote HTTP gateway URL of the MCP server</span>
+            Transport mode
+            <select value={transport} onChange={(e) => setTransport(e.target.value as McpTransport)}>
+              <option value="http">HTTP</option>
+              <option value="sse">SSE</option>
+              <option value="stdio">Stdio</option>
+              <option value="manual">Manual JSON</option>
+            </select>
+            <span className="field-hint">Matches OpenHands MCP transports and manual config mode</span>
           </label>
-          <fieldset className="fieldset">
-            <legend>Authentication (optional)</legend>
+
+          {(transport === 'http' || transport === 'sse') && (
+            <>
+              <label>
+                Server URL
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  required
+                  type="url"
+                  maxLength={2000}
+                  placeholder="https://mcp.example.com/mcp"
+                />
+                <span className="field-hint">Remote MCP endpoint URL</span>
+              </label>
+              <label>
+                Auth mode (optional)
+                <input
+                  value={auth}
+                  onChange={(e) => setAuth(e.target.value)}
+                  maxLength={200}
+                  placeholder="oauth"
+                />
+                <span className="field-hint">Set <strong>oauth</strong> for OAuth-protected MCP endpoints</span>
+              </label>
+              <label>
+                Headers JSON (optional)
+                <textarea
+                  value={headersJson}
+                  onChange={(e) => setHeadersJson(e.target.value)}
+                  rows={4}
+                  placeholder={'{\n  "Authorization": "Bearer <token>"\n}'}
+                />
+                <span className="field-hint">JSON object. Example: Authorization, X-API-Key, etc.</span>
+              </label>
+            </>
+          )}
+
+          {transport === 'stdio' && (
+            <>
+              <label>
+                Command
+                <input
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  required
+                  maxLength={500}
+                  placeholder="python"
+                />
+                <span className="field-hint">Executable to run (for local stdio MCP servers)</span>
+              </label>
+              <label>
+                Args JSON
+                <textarea
+                  value={argsJson}
+                  onChange={(e) => setArgsJson(e.target.value)}
+                  rows={4}
+                  placeholder={'[\n  "-m",\n  "my_mcp_server"\n]'}
+                />
+                <span className="field-hint">JSON array of command arguments</span>
+              </label>
+              <label>
+                Environment JSON (optional)
+                <textarea
+                  value={envJson}
+                  onChange={(e) => setEnvJson(e.target.value)}
+                  rows={4}
+                  placeholder={'{\n  "API_KEY": "secret123"\n}'}
+                />
+                <span className="field-hint">JSON object with env vars injected when launching the server</span>
+              </label>
+            </>
+          )}
+
+          {transport === 'manual' && (
             <label>
-              Header key
-              <input
-                value={headerKey}
-                onChange={(e) => setHeaderKey(e.target.value)}
-                maxLength={200}
-                placeholder="Authorization"
+              Manual MCP server JSON
+              <textarea
+                value={manualConfigJson}
+                onChange={(e) => setManualConfigJson(e.target.value)}
+                rows={10}
+                placeholder={'{\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "https://mcp.example.com/mcp"]\n}'}
               />
+              <span className="field-hint">Advanced mode: this object is used directly as this server entry in mcp.json</span>
             </label>
+          )}
+
+          {transport !== 'manual' && (
             <label>
-              Header value
-              <input
-                value={headerValue}
-                onChange={(e) => setHeaderValue(e.target.value)}
+              Description
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
                 maxLength={2000}
-                placeholder="Bearer &lt;token&gt;"
-                type="password"
-                autoComplete="off"
+                placeholder="What tools does this server expose?"
               />
             </label>
-          </fieldset>
-          <label>
-            Description
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              maxLength={2000}
-              placeholder="What tools does this server expose?"
-            />
-          </label>
+          )}
+
+          {transport === 'manual' && (
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder="Optional notes for this manual config"
+              />
+            </label>
+          )}
           <div className="modal-actions">
             <button type="button" className="btn btn-secondary" onClick={closeModal}>
               Cancel
@@ -251,10 +418,14 @@ export function McpServersPage() {
                 <div className="goal-item-header">
                   <h3>{server.name}</h3>
                 </div>
-                <p className="skill-id muted small">{server.url}</p>
+                <p className="skill-id muted small">[{server.transport.toUpperCase()}] {mcpTarget(server)}</p>
                 {server.description && <p className="goal-desc">{server.description}</p>}
-                {server.header_key && (
-                  <p className="muted small">Auth header: {server.header_key}</p>
+                {(server.transport === 'http' || server.transport === 'sse') &&
+                  Object.keys(server.headers ?? {}).length > 0 && (
+                    <p className="muted small">Headers: {Object.keys(server.headers).join(', ')}</p>
+                  )}
+                {server.transport === 'stdio' && Object.keys(server.env ?? {}).length > 0 && (
+                  <p className="muted small">Env vars: {Object.keys(server.env).join(', ')}</p>
                 )}
                 <div className="goal-meta">
                   <span>Created {new Date(server.created_at).toLocaleString()}</span>

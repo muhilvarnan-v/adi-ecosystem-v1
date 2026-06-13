@@ -10,6 +10,7 @@ class IntegrationProvider(str, Enum):
     GITHUB = "github"
     ZENDESK = "zendesk"
     CIRCLECI = "circleci"
+    SLA = "sla"
 
 
 class IntegrationStatus(BaseModel):
@@ -20,6 +21,11 @@ class IntegrationStatus(BaseModel):
 
 
 class CircleCIConnectResponse(BaseModel):
+    webhook_url: str
+    setup_note: str
+
+
+class SLAConnectResponse(BaseModel):
     webhook_url: str
     setup_note: str
 

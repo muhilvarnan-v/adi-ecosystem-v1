@@ -64,7 +64,15 @@ class SkillRegistryService:
                 headers=self._headers(),
                 json=payload,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_detail = e.response.text
+                try:
+                    error_detail = e.response.json()
+                except Exception:
+                    pass
+                raise Exception(f"Skill Registry API error: {error_detail}") from e
             operation = response.json()
             return await self._wait_for_operation(client, operation)
 

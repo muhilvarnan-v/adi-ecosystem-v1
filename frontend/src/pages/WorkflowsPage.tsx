@@ -13,14 +13,14 @@ function newWorkflowId(): string {
   return `wf-${Date.now()}`;
 }
 
-function emptyWorkflow(): WorkflowDefinition {
+function emptyWorkflow(defaultSandboxId: string | null): WorkflowDefinition {
   return {
     id: newWorkflowId(),
     name: 'New workflow',
     steps: ['develop', 'review', 'test', 'deploy'],
     workflow_roles: {},
     workflow_max_cycles: 3,
-    sandbox_environment_id: null,
+    sandbox_environment_id: defaultSandboxId,
   };
 }
 
@@ -61,7 +61,7 @@ export function WorkflowsPage() {
   const [sandboxes, setSandboxes] = useState<Environment[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ type: 'closed' });
 
@@ -112,22 +112,24 @@ export function WorkflowsPage() {
     };
   }, []);
 
-  async function handleSave() {
+  async function persistWorkflows(nextWorkflows: WorkflowDefinition[]) {
     setSaving(true);
     setError(null);
     try {
-      const res = await saveWorkflows(workflows);
+      const res = await saveWorkflows(nextWorkflows);
       const raw = res.workflows ?? [];
       setWorkflows(raw.map((w: WorkflowDefinition) => normalizeWorkflowRow(w)));
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save workflows');
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
   function openCreate() {
-    setModal({ type: 'create', draft: emptyWorkflow() });
+    setModal({ type: 'create', draft: emptyWorkflow(sandboxes[0]?.id ?? null) });
   }
 
   function openEdit(index: number) {
@@ -140,19 +142,20 @@ export function WorkflowsPage() {
     setModal({ type: 'closed' });
   }
 
-  function confirmModal() {
+  async function confirmModal() {
     if (modal.type === 'closed') return;
-    if (modal.type === 'create') {
-      setWorkflows((prev) => [...prev, normalizeWorkflowRow(modal.draft)]);
-    } else {
-      const { index, draft } = modal;
-      setWorkflows((prev) => prev.map((w, i) => (i === index ? normalizeWorkflowRow(draft) : w)));
-    }
-    setModal({ type: 'closed' });
+    const nextWorkflows =
+      modal.type === 'create'
+        ? [...workflows, normalizeWorkflowRow(modal.draft)]
+        : workflows.map((w, i) => (i === modal.index ? normalizeWorkflowRow(modal.draft) : w));
+    const saved = await persistWorkflows(nextWorkflows);
+    if (saved) setModal({ type: 'closed' });
   }
 
-  function removeWorkflowAt(index: number) {
-    setWorkflows((prev) => prev.filter((_, i) => i !== index));
+  async function removeWorkflowAt(index: number) {
+    const nextWorkflows = workflows.filter((_, i) => i !== index);
+    const saved = await persistWorkflows(nextWorkflows);
+    if (!saved) return;
     setModal((m) => {
       if (m.type === 'closed' || m.type === 'create') return m;
       if (m.index === index) return { type: 'closed' };
@@ -179,7 +182,7 @@ export function WorkflowsPage() {
         sandboxes={sandboxes}
         onClose={closeModal}
         onConfirm={confirmModal}
-        onDelete={modal.type === 'edit' ? () => removeWorkflowAt(modal.index) : undefined}
+        onDelete={modal.type === 'edit' ? () => void removeWorkflowAt(modal.index) : undefined}
       />
     ) : null;
 
@@ -201,9 +204,6 @@ export function WorkflowsPage() {
         <button type="button" className="btn btn-secondary btn-sm" disabled={loading} onClick={openCreate}>
           <PlusIcon />
           Add workflow
-        </button>
-        <button type="button" className="btn btn-primary" disabled={loading || saving} onClick={() => void handleSave()}>
-          {saving ? 'Saving…' : 'Save all workflows'}
         </button>
       </div>
 
@@ -241,7 +241,7 @@ export function WorkflowsPage() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm workflows-list-minimal-trash"
-                    onClick={() => removeWorkflowAt(i)}
+                    onClick={() => void removeWorkflowAt(i)}
                     aria-label={`Remove ${wf.name || 'workflow'}`}
                   >
                     <TrashIcon />

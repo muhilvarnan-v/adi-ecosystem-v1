@@ -56,3 +56,7 @@ export function listGitHubRepos() {
 export function connectCircleCI() {
   return api.post<{ webhook_url: string; setup_note: string }>('/api/integrations/circleci/connect', {});
 }
+
+export function connectSLA() {
+  return api.post<{ webhook_url: string; setup_note: string }>('/api/integrations/sla/connect', {});
+}

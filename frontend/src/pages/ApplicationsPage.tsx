@@ -7,23 +7,13 @@ import {
   listApplications,
   updateApplication,
 } from '../api/applications';
-import { listGoals } from '../api/goals';
-import { listGitHubRepos, listIntegrations } from '../api/integrations';
-import { listSelfHealingIncidents } from '../api/selfHealing';
 import { PlusIcon, TrashIcon } from '../components/Icons';
 import type {
   Application,
-  GitHubRepo,
-  Goal,
-  IntegrationStatus,
   WorkflowDefinition,
 } from '../types';
 import { listWorkflows } from '../api/workflows';
-import {
-  APPLICATION_UNASSIGNED_SLUG,
-  GitHubRepoField,
-  LoadingIndicator,
-} from './applicationSharedUi';
+import { LoadingIndicator } from './applicationSharedUi';
 
 const STANDARD_WORKFLOW_NAME = 'Standard workflow';
 
@@ -33,12 +23,9 @@ function isStandardWorkflow(workflow: WorkflowDefinition): boolean {
 
 export function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
-  const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
-  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
-  const [reposLoadError, setReposLoadError] = useState<string | null>(null);
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDefinition[]>([]);
+  const [modalDependenciesLoading, setModalDependenciesLoading] = useState(false);
+  const [modalDependenciesLoaded, setModalDependenciesLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -46,53 +33,14 @@ export function ApplicationsPage() {
   const [editingApplicationId, setEditingApplicationId] = useState<string | null>(null);
   const [appTitle, setAppTitle] = useState('');
   const [appDescription, setAppDescription] = useState('');
-  const [appRepoUrl, setAppRepoUrl] = useState('');
   const [appSelfHealingWorkflowId, setAppSelfHealingWorkflowId] = useState('');
-
-  const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [appsData, goalsData, integrationsData, wfRes] = await Promise.all([
-        listApplications(),
-        listGoals(),
-        listIntegrations(),
-        listWorkflows().catch(() => ({ workflows: [] as WorkflowDefinition[], updated_at: null })),
-      ]);
+      const appsData = await listApplications();
       setApplications(appsData);
-      setGoals(goalsData);
-      setIntegrations(integrationsData);
-      setWorkflowTemplates(wfRes.workflows ?? []);
-
-      const githubOn = integrationsData.find((i) => i.provider === 'github')?.connected;
-      if (githubOn) {
-        try {
-          setGithubRepos(await listGitHubRepos());
-          setReposLoadError(null);
-        } catch (e) {
-          setGithubRepos([]);
-          setReposLoadError(
-            e instanceof Error ? e.message : 'Failed to load GitHub repositories',
-          );
-        }
-      } else {
-        setGithubRepos([]);
-        setReposLoadError(null);
-      }
-
-      const incidentEntries = await Promise.all(
-        appsData.map(async (app) => {
-          try {
-            const incidents = await listSelfHealingIncidents(app.id);
-            return [app.id, incidents.length] as const;
-          } catch {
-            return [app.id, 0] as const;
-          }
-        }),
-      );
-      setIncidentCounts(Object.fromEntries(incidentEntries));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load applications');
     } finally {
@@ -100,25 +48,40 @@ export function ApplicationsPage() {
     }
   }, []);
 
+  const loadModalDependencies = useCallback(async () => {
+    if (modalDependenciesLoading || modalDependenciesLoaded) return;
+    setModalDependenciesLoading(true);
+    try {
+      const wfRes = await listWorkflows().catch(() => ({ workflows: [] as WorkflowDefinition[], updated_at: null }));
+      setWorkflowTemplates(wfRes.workflows ?? []);
+
+      setModalDependenciesLoaded(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load application settings');
+    } finally {
+      setModalDependenciesLoading(false);
+    }
+  }, [modalDependenciesLoaded, modalDependenciesLoading]);
+
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
     if (!showAppModal) return;
+    void loadModalDependencies();
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') closeAppModal();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [showAppModal]);
+  }, [loadModalDependencies, showAppModal]);
 
   function closeAppModal() {
     setShowAppModal(false);
     setEditingApplicationId(null);
     setAppTitle('');
     setAppDescription('');
-    setAppRepoUrl('');
     setAppSelfHealingWorkflowId('');
   }
 
@@ -126,7 +89,6 @@ export function ApplicationsPage() {
     setEditingApplicationId(app.id);
     setAppTitle(app.title);
     setAppDescription(app.description ?? '');
-    setAppRepoUrl(app.github_repo_url ?? '');
     setAppSelfHealingWorkflowId(app.self_healing_workflow_id ?? '');
     setShowAppModal(true);
   }
@@ -141,7 +103,6 @@ export function ApplicationsPage() {
         const updated = await updateApplication(editingApplicationId, {
           title: appTitle.trim(),
           description: appDescription.trim(),
-          github_repo_url: appRepoUrl || null,
           self_healing_workflow_id: appSelfHealingWorkflowId || null,
         });
         setApplications((prev) => prev.map((a) => (a.id === editingApplicationId ? updated : a)));
@@ -149,16 +110,10 @@ export function ApplicationsPage() {
         const created = await createApplication(
           appTitle.trim(),
           appDescription.trim(),
-          appRepoUrl || null,
+          null,
           { self_healing_workflow_id: appSelfHealingWorkflowId || null },
         );
         setApplications((prev) => [created, ...prev]);
-        try {
-          const incidents = await listSelfHealingIncidents(created.id);
-          setIncidentCounts((prev) => ({ ...prev, [created.id]: incidents.length }));
-        } catch {
-          setIncidentCounts((prev) => ({ ...prev, [created.id]: 0 }));
-        }
       }
       closeAppModal();
     } catch (e) {
@@ -179,22 +134,11 @@ export function ApplicationsPage() {
     try {
       await deleteApplication(id);
       setApplications((prev) => prev.filter((a) => a.id !== id));
-      setGoals((prev) => prev.filter((g) => g.application_id !== id));
-      setIncidentCounts((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete application');
     }
   }
 
-  function goalCountForApp(applicationId: string) {
-    return goals.filter((g) => g.application_id === applicationId).length;
-  }
-
-  const unassignedGoals = goals.filter((g) => !g.application_id);
   const automaticSelfHealingWorkflow =
     workflowTemplates.find(isStandardWorkflow) ??
     (workflowTemplates.length === 1 ? workflowTemplates[0] : null);
@@ -215,6 +159,12 @@ export function ApplicationsPage() {
           </button>
         </div>
         <form onSubmit={handleAppSubmit} className="form">
+          {modalDependenciesLoading && (
+            <div className="applications-modal-loading">
+              <LoadingIndicator />
+              <p className="muted">Loading workflow options...</p>
+            </div>
+          )}
           <label>
             Title
             <input
@@ -236,13 +186,6 @@ export function ApplicationsPage() {
               placeholder="What is this application about?"
             />
           </label>
-          <GitHubRepoField
-            repos={githubRepos}
-            githubConnected={!!githubConnected}
-            value={appRepoUrl}
-            onChange={setAppRepoUrl}
-            reposLoadError={reposLoadError}
-          />
           <fieldset className="fieldset app-self-healing-settings">
             <legend>Self-healing</legend>
             {workflowTemplates.length > 0 ? (
@@ -272,7 +215,7 @@ export function ApplicationsPage() {
             <button type="button" className="btn btn-secondary" onClick={closeAppModal}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
+            <button type="submit" className="btn btn-primary" disabled={submitting || modalDependenciesLoading}>
               <PlusIcon />
               {submitting ? 'Saving…' : editingApplicationId ? 'Save changes' : 'Create application'}
             </button>
@@ -285,6 +228,14 @@ export function ApplicationsPage() {
   function repoLabel(url: string | null | undefined) {
     if (!url) return '—';
     return url.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  }
+
+  function updatedLabel(isoDate: string) {
+    try {
+      return new Date(isoDate).toLocaleDateString();
+    } catch {
+      return 'Recently';
+    }
   }
 
   return (
@@ -303,105 +254,56 @@ export function ApplicationsPage() {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
-      {reposLoadError && !error && <div className="alert alert-error">{reposLoadError}</div>}
       {appModal}
 
       {loading ? (
         <div className="empty-state">
           <LoadingIndicator />
         </div>
-      ) : applications.length === 0 && unassignedGoals.length === 0 ? (
+      ) : applications.length === 0 ? (
         <section className="card">
           <div className="empty-state">
             <p className="muted">No applications yet. Use Add application above to get started.</p>
           </div>
         </section>
       ) : (
-        <div className="applications-table-wrap card">
-          <table className="applications-table">
-            <thead>
-              <tr>
-                <th scope="col">Application</th>
-                <th scope="col">Repository</th>
-                <th scope="col" className="applications-table-numeric">
-                  Goals
-                </th>
-                <th scope="col" className="applications-table-numeric">
-                  Incidents
-                </th>
-                <th scope="col" className="applications-table-actions">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {applications.map((app) => (
-                <tr key={app.id}>
-                  <td>
-                    <div className="applications-table-title">
-                      <Link to={`/applications/${app.id}`} className="applications-table-link">
-                        {app.title}
-                      </Link>
-                      {app.description && (
-                        <p className="applications-table-desc muted">{app.description}</p>
-                      )}
-                    </div>
-                  </td>
-                  <td className="applications-table-repo muted">{repoLabel(app.github_repo_url)}</td>
-                  <td className="applications-table-numeric">{goalCountForApp(app.id)}</td>
-                  <td className="applications-table-numeric">{incidentCounts[app.id] ?? 0}</td>
-                  <td className="applications-table-actions">
-                    <Link to={`/applications/${app.id}`} className="btn btn-primary btn-sm">
-                      Open
-                    </Link>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => openEditApplication(app)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={() => handleDeleteApplication(app.id, app.title)}
-                    >
-                      <TrashIcon />
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {unassignedGoals.length > 0 && (
-                <tr className="applications-table-row-unassigned">
-                  <td>
-                    <div className="applications-table-title">
-                      <Link
-                        to={`/applications/${APPLICATION_UNASSIGNED_SLUG}`}
-                        className="applications-table-link"
-                      >
-                        Unassigned goals
-                      </Link>
-                      <p className="applications-table-desc muted">
-                        Goals without an application. Open to triage on the board.
-                      </p>
-                    </div>
-                  </td>
-                  <td className="applications-table-repo muted">—</td>
-                  <td className="applications-table-numeric">{unassignedGoals.length}</td>
-                  <td className="applications-table-numeric">—</td>
-                  <td className="applications-table-actions">
-                    <Link
-                      to={`/applications/${APPLICATION_UNASSIGNED_SLUG}`}
-                      className="btn btn-primary btn-sm"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="applications-overview">
+          <section className="applications-grid" aria-label="Applications list">
+            {applications.map((app) => (
+              <article key={app.id} className="card applications-grid-card">
+                <div className="applications-grid-card-head">
+                  <Link to={`/applications/${app.id}`} className="applications-grid-card-title">
+                    {app.title}
+                  </Link>
+                  <span className="applications-grid-card-updated">Updated {updatedLabel(app.updated_at)}</span>
+                </div>
+                <p className="applications-grid-card-desc muted">
+                  {app.description?.trim() || 'No description yet.'}
+                </p>
+                <p className="applications-grid-card-repo muted">{repoLabel(app.github_repo_url)}</p>
+                <div className="applications-grid-card-actions">
+                  <Link to={`/applications/${app.id}`} className="btn btn-primary btn-sm">
+                    Open application
+                  </Link>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openEditApplication(app)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => handleDeleteApplication(app.id, app.title)}
+                  >
+                    <TrashIcon />
+                    Delete
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
         </div>
       )}
     </div>

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { listGitHubRepos, listIntegrations } from '../api/integrations';
-import { createSkill, createSkillFromGitHub, deleteSkill, listSkills, updateSkill } from '../api/skills';
-import { ExternalLinkIcon, PlusIcon, SkillIcon, TrashIcon } from '../components/Icons';
-import type { GitHubRepo, IntegrationStatus, Skill } from '../types';
+import { listIntegrations } from '../api/integrations';
+import { createSkill, deleteSkill, listSkills, updateSkill } from '../api/skills';
+import { PlusIcon, SkillIcon, TrashIcon } from '../components/Icons';
+import type { IntegrationStatus, Skill } from '../types';
 import { registryIdFromDisplayName } from '../utils/registryIdFromDisplayName';
 
 const SKILL_ID_FROM_NAME_OPTS = { skillRegistry: true, fallbackSlug: 'skill' } as const;
@@ -18,16 +18,12 @@ function LoadingIndicator() {
   );
 }
 
-const DEFAULT_INCLUDE_PATTERNS = ['SKILL.md', 'scripts/**', 'references/**', 'assets/**'];
-
 export function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
-  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [createTab, setCreateTab] = useState<'manual' | 'github'>('manual');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
 
@@ -36,44 +32,7 @@ export function SkillsPage() {
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [skillMd, setSkillMd] = useState('');
-
-  const [selectedRepo, setSelectedRepo] = useState('');
-  const [reposLoading, setReposLoading] = useState(false);
-  const [reposLoadError, setReposLoadError] = useState<string | null>(null);
-  const [branch, setBranch] = useState('main');
-  const [basePath, setBasePath] = useState('');
-  const [includePatterns, setIncludePatterns] = useState(DEFAULT_INCLUDE_PATTERNS.join(', '));
-
-  const githubConnected = integrations.find((i) => i.provider === 'github')?.connected;
-
-  const loadGitHubRepos = useCallback(async () => {
-    if (!githubConnected) {
-      setGithubRepos([]);
-      setReposLoadError(null);
-      return;
-    }
-    setReposLoading(true);
-    setReposLoadError(null);
-    try {
-      const repos = await listGitHubRepos();
-      setGithubRepos(repos);
-      if (repos.length > 0) {
-        setSelectedRepo((current) => {
-          if (current && repos.some((r) => r.full_name === current)) {
-            return current;
-          }
-          const first = repos[0];
-          setBranch(first.default_branch || 'main');
-          return first.full_name;
-        });
-      }
-    } catch (e) {
-      setGithubRepos([]);
-      setReposLoadError(e instanceof Error ? e.message : 'Failed to load GitHub repositories');
-    } finally {
-      setReposLoading(false);
-    }
-  }, [githubConnected]);
+  const [keywordTrigger, setKeywordTrigger] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,22 +53,6 @@ export function SkillsPage() {
   }, [load]);
 
   useEffect(() => {
-    if (integrations.length === 0) return;
-    if (githubConnected) {
-      void loadGitHubRepos();
-    } else {
-      setGithubRepos([]);
-      setReposLoadError(null);
-    }
-  }, [integrations, githubConnected, loadGitHubRepos]);
-
-  useEffect(() => {
-    if (showCreateModal && createTab === 'github' && githubConnected) {
-      void loadGitHubRepos();
-    }
-  }, [showCreateModal, createTab, githubConnected, loadGitHubRepos]);
-
-  useEffect(() => {
     if (!showCreateModal) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') closeModal();
@@ -124,14 +67,7 @@ export function SkillsPage() {
     setDisplayName('');
     setDescription('');
     setSkillMd('');
-    setBasePath('');
-    setReposLoadError(null);
-    setIncludePatterns(DEFAULT_INCLUDE_PATTERNS.join(', '));
-    setCreateTab('manual');
-  }
-
-  function effectiveGitHubRepo(): string {
-    return selectedRepo.trim();
+    setKeywordTrigger('');
   }
 
   function closeModal() {
@@ -147,14 +83,8 @@ export function SkillsPage() {
     setDisplayName(skill.display_name);
     setDescription(skill.description ?? '');
     setSkillMd('');
-    setCreateTab('manual');
+    setKeywordTrigger(skill.keyword_trigger ?? '');
     setShowCreateModal(true);
-  }
-
-  function handleRepoChange(fullName: string) {
-    setSelectedRepo(fullName);
-    const repo = githubRepos.find((r) => r.full_name === fullName);
-    if (repo) setBranch(repo.default_branch);
   }
 
   async function handleManualSubmit(e: FormEvent) {
@@ -165,12 +95,15 @@ export function SkillsPage() {
     setError(null);
     try {
       if (editingSkillId) {
-        const patch: { display_name: string; description: string; skill_md?: string } = {
+        const patch: { display_name: string; description: string; skill_md?: string; keyword_trigger?: string } = {
           display_name: displayName.trim(),
           description: description.trim(),
         };
         if (skillMd.trim()) {
           patch.skill_md = skillMd.trim();
+        }
+        if (keywordTrigger.trim() !== '') {
+          patch.keyword_trigger = keywordTrigger.trim();
         }
         const updated = await updateSkill(editingSkillId, patch);
         setSkills((s) => s.map((x) => (x.id === editingSkillId ? updated : x)));
@@ -180,6 +113,7 @@ export function SkillsPage() {
           display_name: displayName.trim(),
           description: description.trim(),
           skill_md: skillMd,
+          keyword_trigger: keywordTrigger.trim() || undefined,
         });
         await load();
       }
@@ -188,39 +122,6 @@ export function SkillsPage() {
       setError(
         e instanceof Error ? e.message : editingSkillId ? 'Failed to update skill' : 'Failed to create skill',
       );
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleGitHubSubmit(e: FormEvent) {
-    e.preventDefault();
-    const repo = effectiveGitHubRepo();
-    if (!skillId.trim() || !displayName.trim() || !repo) return;
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      setError('Repository must be in owner/repo format (e.g. my-org/my-skill-repo).');
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      const patterns = includePatterns
-        .split(',')
-        .map((p) => p.trim())
-        .filter(Boolean);
-      await createSkillFromGitHub({
-        skill_id: skillId.trim(),
-        display_name: displayName.trim(),
-        description: description.trim(),
-        repo,
-        branch: branch.trim() || 'main',
-        base_path: basePath.trim(),
-        include_patterns: patterns.length > 0 ? patterns : DEFAULT_INCLUDE_PATTERNS,
-      });
-      closeModal();
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to import skill from GitHub');
     } finally {
       setSubmitting(false);
     }
@@ -284,6 +185,18 @@ export function SkillsPage() {
               />
             </label>
             <label>
+              Keyword trigger (optional)
+              <input
+                value={keywordTrigger}
+                onChange={(e) => setKeywordTrigger(e.target.value)}
+                maxLength={500}
+                placeholder="e.g., 'fix-bug', 'add-feature' - leave empty for always on"
+              />
+              <span className="field-hint">
+                Skill is triggered when keyword is mentioned in agent context. Leave empty to always include this skill.
+              </span>
+            </label>
+            <label>
               SKILL.md (optional)
               <textarea
                 value={skillMd}
@@ -308,26 +221,6 @@ export function SkillsPage() {
           </form>
         ) : (
           <>
-        <div className="tabs">
-          <button
-            type="button"
-            className={createTab === 'manual' ? 'tab active' : 'tab'}
-            onClick={() => setCreateTab('manual')}
-          >
-            Manual
-          </button>
-          <button
-            type="button"
-            className={createTab === 'github' ? 'tab active' : 'tab'}
-            onClick={() => setCreateTab('github')}
-            disabled={!githubConnected}
-            title={!githubConnected ? 'Connect GitHub in Integrations' : undefined}
-          >
-            From GitHub
-          </button>
-        </div>
-
-        {createTab === 'manual' && (
           <form onSubmit={handleManualSubmit} className="form">
             <label>
               Display name
@@ -376,6 +269,18 @@ export function SkillsPage() {
               />
             </label>
             <label>
+              Keyword trigger (optional)
+              <input
+                value={keywordTrigger}
+                onChange={(e) => setKeywordTrigger(e.target.value)}
+                maxLength={500}
+                placeholder="e.g., 'fix-bug', 'add-feature' - leave empty for always on"
+              />
+              <span className="field-hint">
+                Skill is triggered when keyword is mentioned in agent context. Leave empty to always include this skill.
+              </span>
+            </label>
+            <label>
               SKILL.md
               <textarea
                 value={skillMd}
@@ -395,122 +300,6 @@ export function SkillsPage() {
               </button>
             </div>
           </form>
-        )}
-
-        {createTab === 'github' && (
-          <form onSubmit={handleGitHubSubmit} className="form">
-            <label>
-              Display name
-              <input
-                value={displayName}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDisplayName(v);
-                  if (!skillIdTouched) {
-                    setSkillId(registryIdFromDisplayName(v, SKILL_ID_FROM_NAME_OPTS));
-                  }
-                }}
-                required
-                maxLength={200}
-                placeholder="My Skill"
-                autoFocus
-              />
-            </label>
-            <label>
-              Skill ID
-              <input
-                value={skillId}
-                onChange={(e) => {
-                  setSkillIdTouched(true);
-                  setSkillId(e.target.value.toLowerCase());
-                }}
-                required
-                pattern="[a-z][a-z0-9-]*[a-z0-9]"
-                maxLength={63}
-                placeholder="my-skill"
-              />
-              <span className="field-hint">
-                Auto-filled from the display name; you can edit before import. Reserved prefix gcp- is adjusted
-                automatically.
-              </span>
-            </label>
-            <label>
-              Description
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                maxLength={2000}
-                placeholder="What does this skill help agents do?"
-              />
-            </label>
-
-            {reposLoadError && <div className="alert alert-error">{reposLoadError}</div>}
-            <label>
-              Repository
-              <select
-                value={selectedRepo}
-                onChange={(e) => handleRepoChange(e.target.value)}
-                disabled={reposLoading || githubRepos.length === 0}
-              >
-                {reposLoading ? (
-                  <option value="">Loading repositories…</option>
-                ) : githubRepos.length === 0 ? (
-                  <option value="">No repositories in dropdown</option>
-                ) : (
-                  githubRepos.map((repo) => (
-                    <option key={repo.id} value={repo.full_name}>
-                      {repo.full_name}
-                      {repo.private ? ' (private)' : ''}
-                    </option>
-                  ))
-                )}
-              </select>
-              <span className="field-hint">
-                {githubRepos.length === 0
-                  ? 'Connect GitHub in Integrations and grant access to repositories you want to import from.'
-                  : 'Pick a repository from your GitHub account.'}
-              </span>
-            </label>
-            <label>
-              Branch
-              <input value={branch} onChange={(e) => setBranch(e.target.value)} required maxLength={200} />
-            </label>
-            <label>
-              Base path
-              <input
-                value={basePath}
-                onChange={(e) => setBasePath(e.target.value)}
-                maxLength={500}
-                placeholder="skills/my-skill (optional subdirectory)"
-              />
-              <span className="field-hint">Only files under this path are considered</span>
-            </label>
-            <label>
-              Include patterns
-              <input
-                value={includePatterns}
-                onChange={(e) => setIncludePatterns(e.target.value)}
-                required
-                placeholder="SKILL.md, scripts/**, references/**"
-              />
-              <span className="field-hint">Comma-separated glob patterns (must include SKILL.md)</span>
-            </label>
-            <div className="modal-actions">
-              <button type="button" className="btn btn-secondary" onClick={closeModal}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting || !effectiveGitHubRepo()}
-              >
-                <PlusIcon />
-                {submitting ? 'Importing…' : 'Import from GitHub'}
-              </button>
-            </div>
-          </form>
-        )}
           </>
         )}
       </div>

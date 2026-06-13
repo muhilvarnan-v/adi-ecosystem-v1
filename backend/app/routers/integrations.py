@@ -14,6 +14,7 @@ from app.schemas.integration import (
     IntegrationProvider,
     IntegrationStatus,
     JiraSpacePreview,
+    SLAConnectResponse,
 )
 from app.schemas.skill import GitHubRepoPreview
 from app.services.firestore import get_firestore
@@ -80,6 +81,31 @@ def connect_circleci(user_id: str = Depends(get_user_id)):
             "'workflow-completed' and/or 'job-completed'. "
             "When a workflow or job fails, we create a self-healing goal for each application "
             "that has Auto fix enabled and whose linked GitHub repository matches the pipeline repository."
+        ),
+    )
+
+
+@router.post("/sla/connect", response_model=SLAConnectResponse)
+def connect_sla(user_id: str = Depends(get_user_id)):
+    """Register an inbound webhook token for SLO/SLA breach events."""
+    db = get_firestore()
+    token = secrets.token_urlsafe(32)
+    settings = get_settings()
+    base = settings.oauth_redirect_base.rstrip("/")
+    webhook_url = f"{base}/api/self-healing/sla/webhook?token={token}"
+    db.save_integration(
+        user_id,
+        IntegrationProvider.SLA.value,
+        {"webhook_token": token},
+        "SLA/SLO",
+    )
+    return SLAConnectResponse(
+        webhook_url=webhook_url,
+        setup_note=(
+            "Configure your Google Cloud Run SLO alert/webhook to POST this URL. "
+            "When an SLA/SLO breach event is received, we create a self-healing goal for each application "
+            "that has Auto fix enabled and whose linked GitHub repository matches the event repository metadata "
+            "(or title/repo markers in the payload)."
         ),
     )
 

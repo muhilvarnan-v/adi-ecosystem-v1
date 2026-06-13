@@ -7,14 +7,21 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 
 from app.config import get_settings
-from app.schemas.goal import GoalExecutionStatus, GoalStatus
-from app.schemas.self_healing import CircleCIWebhookResult, SelfHealingIncident, ZendeskWebhookResult
+from app.schemas.goal import GoalExecutionStatus, GoalSource, GoalStatus
+from app.schemas.self_healing import (
+    CircleCIWebhookResult,
+    SLAWebhookResult,
+    SelfHealingIncident,
+    ZendeskWebhookResult,
+)
 from app.services.circleci_goal import (
     application_matches_circleci_repo,
     create_circleci_goal_from_failure_event,
     parse_circleci_failure,
     repo_url_from_circleci_payload,
 )
+from app.services.goal_execution import schedule_goal_execution
+from app.services.zendesk_goal import build_goal_workflow_snapshot, require_application_for_goal
 from app.services.zendesk_goal import create_zendesk_goal_from_ticket_fields
 from app.services.zendesk_oauth import ZendeskOAuthService
 
@@ -303,6 +310,24 @@ def _incident_from_circleci_goal(goal: dict[str, Any]) -> SelfHealingIncident:
     )
 
 
+def _incident_from_sla_goal(goal: dict[str, Any]) -> SelfHealingIncident:
+    gid = str(goal.get("id") or "")
+    return SelfHealingIncident(
+        id=gid,
+        key=goal.get("external_id"),
+        title=str(goal.get("title") or "SLA breach"),
+        description=str(goal.get("description") or ""),
+        url=goal.get("external_url"),
+        status="breached",
+        priority="high",
+        goal_id=gid or None,
+        goal_status=_goal_status(goal),
+        execution_status=_goal_execution_status(goal),
+        pr_url=goal.get("pr_url"),
+        kind="sla_breach",
+    )
+
+
 def list_application_ci_incidents(db, user_id: str, application_id: str) -> list[SelfHealingIncident]:
     app = db.get_application(application_id, user_id)
     if not app:
@@ -318,6 +343,226 @@ def list_application_ci_incidents(db, user_id: str, application_id: str) -> list
         if str(g.get("source") or "") == "circleci"
     ]
     return [_incident_from_circleci_goal(g) for g in rows]
+
+
+def list_application_sla_incidents(db, user_id: str, application_id: str) -> list[SelfHealingIncident]:
+    app = db.get_application(application_id, user_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if not db.get_integration(user_id, "sla"):
+        raise HTTPException(
+            status_code=400,
+            detail="SLA is not connected. Connect it in Integrations, then add the webhook URL in Google Cloud Run alerting.",
+        )
+    rows = [
+        g
+        for g in db.list_goals(user_id, application_id=application_id)
+        if str(g.get("source") or "") == "sla"
+    ]
+    return [_incident_from_sla_goal(g) for g in rows]
+
+
+def _normalize_repo_url(url: str) -> str:
+    raw = str(url or "").strip().lower().removesuffix(".git")
+    if not raw:
+        return ""
+    if raw.startswith("git@github.com:"):
+        return "https://github.com/" + raw.split(":", 1)[1].strip()
+    return raw
+
+
+def _payload_repository_url(payload: dict[str, Any]) -> str:
+    candidates = [
+        payload.get("repository_url"),
+        payload.get("repo_url"),
+        payload.get("github_repo_url"),
+        payload.get("target_repository_url"),
+    ]
+    resource = payload.get("resource")
+    if isinstance(resource, dict):
+        candidates.extend(
+            [
+                resource.get("repository_url"),
+                resource.get("repo_url"),
+                resource.get("github_repo_url"),
+            ]
+        )
+    for value in candidates:
+        url = str(value or "").strip()
+        if url:
+            return url
+    return ""
+
+
+def _payload_text(payload: dict[str, Any]) -> str:
+    pieces: list[str] = []
+    for key in (
+        "title",
+        "summary",
+        "description",
+        "message",
+        "alert_name",
+        "policy_name",
+        "service",
+        "service_name",
+        "application",
+        "application_name",
+        "repository",
+        "repo",
+    ):
+        value = payload.get(key)
+        if value is not None:
+            pieces.append(str(value))
+
+    labels = payload.get("labels")
+    if isinstance(labels, dict):
+        for value in labels.values():
+            if value is not None:
+                pieces.append(str(value))
+
+    annotations = payload.get("annotations")
+    if isinstance(annotations, dict):
+        for value in annotations.values():
+            if value is not None:
+                pieces.append(str(value))
+
+    return "\n".join(pieces).lower()
+
+
+def _payload_indicates_breach(payload: dict[str, Any]) -> bool:
+    text = _payload_text(payload)
+    trigger_state = str(payload.get("state") or payload.get("status") or payload.get("severity") or "").lower()
+    if any(k in trigger_state for k in ("breach", "violation", "firing", "critical", "open")):
+        return True
+    return any(k in text for k in ("slo", "sla", "breach", "violation", "error budget"))
+
+
+def _matches_sla_application(app: dict[str, Any], payload: dict[str, Any], repository_url: str) -> bool:
+    app_repo = _normalize_repo_url(str(app.get("github_repo_url") or ""))
+    if repository_url and app_repo and _normalize_repo_url(repository_url) == app_repo:
+        return True
+
+    text = _payload_text(payload)
+    title = str(app.get("title") or "").strip().lower()
+    if title and title in text:
+        return True
+    if app_repo and any(marker in text for marker in _repo_markers(app_repo)):
+        return True
+    return False
+
+
+def _parse_sla_breach_event(payload: dict[str, Any]) -> tuple[str, str, str, str | None, str] | None:
+    if not _payload_indicates_breach(payload):
+        return None
+
+    alert_id = str(
+        payload.get("incident_id")
+        or payload.get("alert_id")
+        or payload.get("id")
+        or ""
+    ).strip()
+    if not alert_id:
+        # Keep dedupe stable enough even when provider omits explicit ids.
+        title_seed = str(payload.get("title") or payload.get("alert_name") or "sla-breach").strip()
+        alert_id = f"anon:{title_seed}:{str(payload.get('started_at') or payload.get('timestamp') or '')}"
+
+    external_id = f"sla:{alert_id}"
+    service_name = str(payload.get("service") or payload.get("service_name") or "").strip()
+    policy_name = str(payload.get("policy_name") or payload.get("alert_name") or "SLO breach").strip()
+    prefix = f"{service_name}: " if service_name else ""
+    title = f"SLA breach: {prefix}{policy_name}".strip()
+    external_url = str(payload.get("url") or payload.get("incident_url") or payload.get("link") or "").strip() or None
+
+    description_lines = [
+        "Google Cloud Run SLO/SLA webhook reported a breach event.",
+        "",
+        f"- Policy: {policy_name}",
+    ]
+    if service_name:
+        description_lines.append(f"- Service: {service_name}")
+    severity = str(payload.get("severity") or "").strip()
+    if severity:
+        description_lines.append(f"- Severity: {severity}")
+    status = str(payload.get("status") or payload.get("state") or "").strip()
+    if status:
+        description_lines.append(f"- Status: {status}")
+
+    repo_url = _payload_repository_url(payload)
+    if repo_url:
+        description_lines.append(f"- Repository: {repo_url}")
+
+    description_lines.extend(["", "Raw event (subset):", "```json"])
+    try:
+        slim = {
+            "id": payload.get("id"),
+            "incident_id": payload.get("incident_id"),
+            "alert_id": payload.get("alert_id"),
+            "title": payload.get("title"),
+            "policy_name": payload.get("policy_name"),
+            "service": payload.get("service") or payload.get("service_name"),
+            "status": payload.get("status") or payload.get("state"),
+            "severity": payload.get("severity"),
+            "repository_url": repo_url,
+            "url": payload.get("url") or payload.get("incident_url") or payload.get("link"),
+        }
+        import json
+
+        description_lines.append(json.dumps(slim, indent=2)[:8000])
+    except Exception:
+        description_lines.append("(could not serialize payload)")
+    description_lines.append("```")
+
+    return external_id, title, "\n".join(description_lines), external_url, repo_url
+
+
+def create_sla_goal_from_breach_event(
+    db,
+    *,
+    user_id: str,
+    application_id: str,
+    workflow_id: str,
+    external_id: str,
+    title: str,
+    description: str,
+    external_url: str | None,
+    workflow_roles: dict[str, str] | None = None,
+    dedupe: bool = True,
+) -> dict[str, Any] | None:
+    app = require_application_for_goal(db, application_id, user_id)
+
+    if dedupe and external_id:
+        existing = db.find_goal_by_external_id(
+            user_id=user_id,
+            application_id=application_id,
+            source=GoalSource.SLA.value,
+            external_id=external_id,
+        )
+        if existing:
+            return existing
+
+    roles = workflow_roles or {}
+    merged, steps, max_cycles, wf_id = build_goal_workflow_snapshot(
+        db, user_id, app, roles, workflow_id
+    )
+
+    row = db.create_goal(
+        user_id=user_id,
+        title=title,
+        description=description,
+        source=GoalSource.SLA.value,
+        application_id=application_id,
+        external_id=external_id,
+        external_url=external_url,
+        agent_record_id=merged.get("develop"),
+        workflow_roles=merged,
+        workflow_id=wf_id,
+        workflow_steps=steps,
+        workflow_max_cycles=max_cycles,
+        status=GoalStatus.IN_PROGRESS.value,
+        execution_status=GoalExecutionStatus.QUEUED.value,
+    )
+    schedule_goal_execution(row["id"], user_id)
+    return row
 
 
 def handle_circleci_webhook(
@@ -398,6 +643,79 @@ def handle_circleci_webhook(
                     triggered_goals += 1
 
     return CircleCIWebhookResult(
+        matched_applications=matched_apps,
+        triggered_goals=triggered_goals,
+        goals=goals,
+        received_at=datetime.now(timezone.utc),
+    )
+
+
+def handle_sla_webhook(
+    db,
+    *,
+    webhook_token: str,
+    payload: dict[str, Any],
+) -> SLAWebhookResult:
+    token = webhook_token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing webhook token query parameter.")
+    integrations = db.list_sla_integrations_by_webhook_token(token)
+    if not integrations:
+        raise HTTPException(status_code=404, detail="Unknown SLA webhook token.")
+
+    parsed = _parse_sla_breach_event(payload)
+    if not parsed:
+        return SLAWebhookResult(
+            matched_applications=0,
+            triggered_goals=0,
+            goals=[],
+            received_at=datetime.now(timezone.utc),
+            ignored=True,
+            ignore_reason="Payload did not look like an active SLA/SLO breach event.",
+        )
+
+    external_id, title, description, external_url, repository_url = parsed
+    matched_apps = 0
+    triggered_goals = 0
+    goals: list[dict[str, Any]] = []
+
+    for integration in integrations:
+        user_id = integration.get("user_id")
+        if not user_id:
+            continue
+        for app in db.list_self_healing_applications(str(user_id)):
+            if not _matches_sla_application(app, payload, repository_url):
+                continue
+            workflow_id = _resolve_self_healing_workflow_id(db, str(user_id), app)
+            if not workflow_id:
+                continue
+            matched_apps += 1
+            row = create_sla_goal_from_breach_event(
+                db,
+                user_id=str(user_id),
+                application_id=str(app["id"]),
+                workflow_id=workflow_id,
+                external_id=external_id,
+                title=title,
+                description=description,
+                external_url=external_url,
+                workflow_roles={},
+                dedupe=True,
+            )
+            if row:
+                goals.append(
+                    {
+                        "id": row["id"],
+                        "application_id": row.get("application_id"),
+                        "external_id": row.get("external_id"),
+                        "execution_status": row.get("execution_status"),
+                        "pr_url": row.get("pr_url"),
+                    }
+                )
+                if row.get("execution_status") in {"queued", "running"}:
+                    triggered_goals += 1
+
+    return SLAWebhookResult(
         matched_applications=matched_apps,
         triggered_goals=triggered_goals,
         goals=goals,

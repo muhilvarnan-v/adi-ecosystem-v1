@@ -31,6 +31,7 @@ export function updateApplication(
     workflow_max_cycles?: number;
     self_healing_enabled?: boolean;
     self_healing_workflow_id?: string | null;
+    cloud_infrastructure?: Application['cloud_infrastructure'];
   },
 ) {
   return api.patch<Application>(`/api/applications/${id}`, updates);

@@ -152,6 +152,15 @@ export function GitHubIcon({ className }: IconProps) {
   );
 }
 
+export function CloudIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7.5 18a4.5 4.5 0 0 1-.4-8.98 6 6 0 0 1 11.62 1.53A3.75 3.75 0 0 1 18.75 18Z" />
+      <path d="M6 18h12" />
+    </svg>
+  );
+}
+
 export function LlmIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
